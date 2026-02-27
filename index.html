@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>漢字書き順ジェネレーター 実験</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@900&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { display:flex; flex-direction:column; align-items:center; min-height:100vh; background:#f0f0f0; font-family:sans-serif; padding:20px; }
+  h1 { font-size:20px; color:#333; margin-bottom:16px; }
+  .canvas-area { position:relative; width:300px; height:300px; background:#fff; border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,0.1); overflow:hidden; }
+
+  /* フォントで描画した参照文字（薄く表示） */
+  .ref-char { position:absolute; top:0; left:0; width:100%; height:100%; display:flex; align-items:center; justify-content:center;
+    font-family:'Noto Serif JP', serif; font-size:250px; font-weight:900; color:rgba(200,200,200,0.4);
+    line-height:1; user-select:none; pointer-events:none; }
+
+  /* ストロークSVGを上に重ねる */
+  .stroke-svg { position:absolute; top:0; left:0; width:100%; height:100%; }
+
+  .controls { margin-top:20px; display:flex; gap:12px; flex-wrap:wrap; justify-content:center; }
+  button { padding:10px 20px; font-size:15px; border:none; border-radius:8px; cursor:pointer; background:#FF8E53; color:#fff; font-weight:700; }
+  button:active { background:#e07040; }
+  button.secondary { background:#aaa; }
+  .toggle-label { margin-top:12px; font-size:14px; color:#666; display:flex; align-items:center; gap:8px; }
+  .info { margin-top:16px; color:#888; font-size:13px; text-align:center; line-height:1.8; max-width:340px; }
+</style>
+</head>
+<body>
+
+<h1>書き順データ生成 実験: 「山」</h1>
+
+<div class="canvas-area">
+  <!-- 参照: Noto Serif JP で描画した「山」 -->
+  <div class="ref-char" id="refChar">山</div>
+
+  <!-- AI生成ストローク -->
+  <svg class="stroke-svg" viewBox="0 0 300 300">
+    <!-- ガイド線 -->
+    <line x1="150" y1="0" x2="150" y2="300" stroke="#eee" stroke-width="0.5" stroke-dasharray="6,6"/>
+    <line x1="0" y1="150" x2="300" y2="150" stroke="#eee" stroke-width="0.5" stroke-dasharray="6,6"/>
+
+    <!-- 第1画: 左の縦線（上から下） -->
+    <path id="stroke1" d="M 82,195 L 82,95"
+      fill="none" stroke="#e53935" stroke-width="10" stroke-linecap="round"/>
+
+    <!-- 第2画: 中央の縦線（上端から下端まで、最も長い） -->
+    <path id="stroke2" d="M 150,52 L 150,248"
+      fill="none" stroke="#1e88e5" stroke-width="10" stroke-linecap="round"/>
+
+    <!-- 第3画: 横線（左→右）→ 右の縦線（下→上）の折れ -->
+    <path id="stroke3" d="M 38,195 L 262,195 L 262,95"
+      fill="none" stroke="#43a047" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</div>
+
+<div class="controls">
+  <button onclick="startAnimation()">書き順スタート</button>
+  <button class="secondary" onclick="resetStrokes()">リセット</button>
+  <button class="secondary" onclick="toggleRef()">参照 ON/OFF</button>
+</div>
+
+<label class="toggle-label">
+  <input type="checkbox" id="colorMode" checked onchange="toggleColor()"> 画ごとに色分け
+</label>
+
+<div class="info">
+  フォント参照（薄いグレー）= Noto Serif JP<br>
+  色付きの線 = AI生成のストロークパス<br>
+  ずれていたら座標を修正して精度を上げる
+</div>
+
+<script>
+const strokes = [
+  document.getElementById("stroke1"),
+  document.getElementById("stroke2"),
+  document.getElementById("stroke3"),
+];
+const durations = [400, 500, 700];
+const gaps = [0, 250, 250];
+const colors = ["#e53935", "#1e88e5", "#43a047"];
+
+function hideAll() {
+  strokes.forEach(s => {
+    const len = s.getTotalLength();
+    s.style.transition = "none";
+    s.style.strokeDasharray = len;
+    s.style.strokeDashoffset = len;
+  });
+}
+
+function startAnimation() {
+  hideAll();
+  let delay = 50;
+  strokes.forEach((s, i) => {
+    delay += gaps[i];
+    setTimeout(() => {
+      s.style.transition = `stroke-dashoffset ${durations[i]}ms ease`;
+      s.style.strokeDashoffset = "0";
+    }, delay);
+    delay += durations[i];
+  });
+}
+
+function resetStrokes() {
+  hideAll();
+}
+
+function toggleRef() {
+  const ref = document.getElementById("refChar");
+  ref.style.display = ref.style.display === "none" ? "flex" : "none";
+}
+
+function toggleColor() {
+  const mono = !document.getElementById("colorMode").checked;
+  strokes.forEach((s, i) => {
+    s.setAttribute("stroke", mono ? "#333" : colors[i]);
+  });
+}
+
+hideAll();
+</script>
+
+</body>
+</html>
