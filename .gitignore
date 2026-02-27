@@ -1,0 +1,5 @@
+# Cloudflare Wrangler のキャッシュ・一時ファイル
+.wrangler/
+
+# 一時ファイル
+*.tmp.*
