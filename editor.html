@@ -110,6 +110,7 @@ let tapPoints = [];         // 現在の画の配置点 [{x, y}, ...]
 let splineStrokes = [];     // 確定済み [{points: [{x,y}...], path: "M...C..."}]
 let dragIdx = -1;              // ドラッグ中の点インデックス (-1=なし)
 let isDragging = false;        // ドラッグ中フラグ
+let lastSnappedPos = null;     // スナップカーソルが表示していた位置（指離し時にこの位置を使う）
 
 // --- DOM参照 ---
 const svg = document.getElementById('drawSvg');
@@ -127,6 +128,38 @@ svg.appendChild(centerLineGroup);
 const tapGroup = document.createElementNS(SVG_NS, 'g');
 tapGroup.id = 'tapGroup';
 svg.appendChild(tapGroup);
+
+// スナップカーソル（タップ前にスナップ先をプレビュー）
+const snapCursorGroup = document.createElementNS(SVG_NS, 'g');
+snapCursorGroup.id = 'snapCursor';
+snapCursorGroup.style.display = 'none';
+snapCursorGroup.setAttribute('pointer-events', 'none');
+svg.appendChild(snapCursorGroup);
+const scH = document.createElementNS(SVG_NS, 'line');
+scH.setAttribute('stroke', '#FF8E53');
+scH.setAttribute('stroke-width', '1.5');
+scH.setAttribute('stroke-opacity', '0.8');
+const scV = document.createElementNS(SVG_NS, 'line');
+scV.setAttribute('stroke', '#FF8E53');
+scV.setAttribute('stroke-width', '1.5');
+scV.setAttribute('stroke-opacity', '0.8');
+const scDot = document.createElementNS(SVG_NS, 'circle');
+scDot.setAttribute('r', '3');
+scDot.setAttribute('fill', '#FF8E53');
+scDot.setAttribute('fill-opacity', '0.8');
+snapCursorGroup.appendChild(scH);
+snapCursorGroup.appendChild(scV);
+snapCursorGroup.appendChild(scDot);
+
+function showSnapCursor(x, y) {
+  scH.setAttribute('x1', x - 10); scH.setAttribute('y1', y);
+  scH.setAttribute('x2', x + 10); scH.setAttribute('y2', y);
+  scV.setAttribute('x1', x); scV.setAttribute('y1', y - 10);
+  scV.setAttribute('x2', x); scV.setAttribute('y2', y + 10);
+  scDot.setAttribute('cx', x); scDot.setAttribute('cy', y);
+  snapCursorGroup.style.display = '';
+}
+function hideSnapCursor() { snapCursorGroup.style.display = 'none'; }
 
 // 中心線キャッシュ
 let cachedCenterKanji = '';
@@ -180,32 +213,55 @@ svg.addEventListener('pointerdown', (e) => {
       break;
     }
   }
+
+  // ドラッグ対象でなければ、スナップ先をプレビュー
+  if (dragIdx < 0) {
+    const snapped = applySnap({ x: Math.round(tapStartPos.x), y: Math.round(tapStartPos.y) });
+    lastSnappedPos = snapped;
+    showSnapCursor(snapped.x, snapped.y);
+  }
 });
 
 svg.addEventListener('pointermove', (e) => {
-  if (dragIdx < 0 || !tapStartPos) return;
-  isDragging = true;
+  if (!tapStartPos) return;
   const pt = getSvgPoint(e);
-  // 40px上にオフセット（指の下に隠れない）
-  tapPoints[dragIdx] = { x: Math.round(pt.x), y: Math.round(pt.y - 40) };
-  redrawTapUI();
+
+  if (dragIdx >= 0) {
+    // ドラッグ中: 点を移動
+    isDragging = true;
+    const dragPt = { x: Math.round(pt.x), y: Math.round(pt.y - 40) };
+    tapPoints[dragIdx] = dragPt;
+    // ドラッグ中もスナップ先をプレビュー
+    const snapped = applySnap(dragPt);
+    lastSnappedPos = snapped;
+    showSnapCursor(snapped.x, snapped.y);
+    redrawTapUI();
+  } else {
+    // 新規配置: スナップ先をリアルタイム更新
+    const snapped = applySnap({ x: Math.round(pt.x), y: Math.round(pt.y) });
+    lastSnappedPos = snapped;
+    showSnapCursor(snapped.x, snapped.y);
+  }
 });
 
 svg.addEventListener('pointerup', (e) => {
+  hideSnapCursor();
   if (!tapStartPos) return;
   const pt = getSvgPoint(e);
 
   if (isDragging && dragIdx >= 0) {
-    // ドラッグ終了 → スナップ適用
-    tapPoints[dragIdx] = applySnap(tapPoints[dragIdx]);
+    // ドラッグ終了 → プレビューで表示していた位置をそのまま使う
+    if (lastSnappedPos) {
+      tapPoints[dragIdx] = lastSnappedPos;
+    }
     redrawTapUI();
   } else {
     // タップ判定: 移動が少なく、短時間
     const dist = Math.hypot(pt.x - tapStartPos.x, pt.y - tapStartPos.y);
     const elapsed = Date.now() - tapStartTime;
     if (dist < 15 && elapsed < 500) {
-      let newPt = { x: Math.round(pt.x), y: Math.round(pt.y) };
-      newPt = applySnap(newPt);
+      // プレビューで表示していた位置をそのまま使う
+      const newPt = lastSnappedPos || { x: Math.round(pt.x), y: Math.round(pt.y) };
       tapPoints.push(newPt);
       redrawTapUI();
       updateStrokeCount();
@@ -214,6 +270,7 @@ svg.addEventListener('pointerup', (e) => {
   tapStartPos = null;
   dragIdx = -1;
   isDragging = false;
+  lastSnappedPos = null;
 });
 
 // タッチ制御: 1本指=タップ、2本指=スクロール＆ピンチズーム
@@ -285,25 +342,37 @@ function redrawTapUI() {
     tapGroup.appendChild(preview);
   }
 
-  // 配置した点（番号付き、ドラッグ中は強調表示）
+  // 配置した点（中抜き円 + 中心ドット + 番号左上）
   tapPoints.forEach((pt, i) => {
     const beingDragged = isDragging && i === dragIdx;
+    const r = beingDragged ? 12 : 8;
+
+    // 中抜き円（透明）
     const circle = document.createElementNS(SVG_NS, 'circle');
     circle.setAttribute('cx', pt.x);
     circle.setAttribute('cy', pt.y);
-    circle.setAttribute('r', beingDragged ? '14' : '10');
-    circle.setAttribute('fill', beingDragged ? curColor : 'white');
+    circle.setAttribute('r', r);
+    circle.setAttribute('fill', 'none');
     circle.setAttribute('stroke', curColor);
-    circle.setAttribute('stroke-width', '2.5');
+    circle.setAttribute('stroke-width', beingDragged ? '2.5' : '1.5');
     tapGroup.appendChild(circle);
 
+    // 中心ドット
+    const dot = document.createElementNS(SVG_NS, 'circle');
+    dot.setAttribute('cx', pt.x);
+    dot.setAttribute('cy', pt.y);
+    dot.setAttribute('r', '2');
+    dot.setAttribute('fill', curColor);
+    tapGroup.appendChild(dot);
+
+    // 番号（左上に小さく）
     const text = document.createElementNS(SVG_NS, 'text');
-    text.setAttribute('x', pt.x);
-    text.setAttribute('y', pt.y + 4);
-    text.setAttribute('text-anchor', 'middle');
-    text.setAttribute('font-size', '11');
+    text.setAttribute('x', pt.x - r - 2);
+    text.setAttribute('y', pt.y - r - 1);
+    text.setAttribute('text-anchor', 'end');
+    text.setAttribute('font-size', '9');
     text.setAttribute('font-weight', '700');
-    text.setAttribute('fill', beingDragged ? 'white' : curColor);
+    text.setAttribute('fill', curColor);
     text.setAttribute('pointer-events', 'none');
     text.textContent = i + 1;
     tapGroup.appendChild(text);
@@ -362,97 +431,131 @@ function updateStrokeCount() {
 }
 
 // ===========================
-// 中心線: 走査線方式で事前計算 + 表示 + スナップ
+// 中心線: Zhang-Suen 細線化で骨格抽出
 // ===========================
 
-// 走査線でアウトライン断面の中心点群を計算し、ストロークごとにグループ化
-function computeScanLines(outline, axis) {
-  const STEP = 3;
-  const THRESHOLD = 50; // この幅以下の断面のみ対象
-  const lines = [];      // ストロークごとのポリライン [ [{x,y}, ...], ... ]
-
-  // 走査範囲を決定
-  const idx = axis === 'h' ? 1 : 0;
-  let min = Infinity, max = -Infinity;
-  for (const pt of outline) {
-    min = Math.min(min, pt[idx]);
-    max = Math.max(max, pt[idx]);
+// フォントをCanvasに直接描画してビットマップを取得（ポリゴン近似より正確）
+function rasterizeFromFont(kanji, w, h) {
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.font = '600 250px "Klee One"';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#000';
+  // Klee One メトリクス: ascent=1160, descent=288, unitsPerEm=1000
+  // CSS座標系に合わせたベースライン: 25 + (-56) + 290 = 259
+  ctx.fillText(kanji, w / 2, 259);
+  const img = ctx.getImageData(0, 0, w, h);
+  const bmp = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    bmp[i] = img.data[i * 4 + 3] > 128 ? 1 : 0;
   }
-
-  for (let pos = Math.ceil(min) + 2; pos < max - 1; pos += STEP) {
-    // レイキャストで交点を求める
-    const hits = [];
-    for (let i = 0; i < outline.length; i++) {
-      const [x1, y1] = outline[i];
-      const [x2, y2] = outline[(i + 1) % outline.length];
-      let a1, a2, b1, b2;
-      if (axis === 'h') { a1 = y1; a2 = y2; b1 = x1; b2 = x2; }
-      else              { a1 = x1; a2 = x2; b1 = y1; b2 = y2; }
-
-      if ((a1 <= pos && a2 > pos) || (a2 <= pos && a1 > pos)) {
-        const t = (pos - a1) / (a2 - a1);
-        hits.push(b1 + t * (b2 - b1));
-      }
-    }
-    hits.sort((a, b) => a - b);
-
-    // 連続ペアの中点を計算
-    const centers = [];
-    for (let j = 0; j + 1 < hits.length; j += 2) {
-      const w = hits[j + 1] - hits[j];
-      if (w > 3 && w < THRESHOLD) {
-        const mid = (hits[j] + hits[j + 1]) / 2;
-        if (axis === 'h') centers.push({ x: mid, y: pos });
-        else               centers.push({ x: pos, y: mid });
-      }
-    }
-
-    // 既存ラインとマッチング（最近傍で接続）
-    const usedLines = new Set();
-    for (const c of centers) {
-      let bestLine = -1, bestDist = 15;
-      for (let li = 0; li < lines.length; li++) {
-        if (usedLines.has(li)) continue;
-        const last = lines[li][lines[li].length - 1];
-        const dScan = Math.abs(pos - last[axis === 'h' ? 'y' : 'x']);
-        if (dScan > STEP * 2) continue; // 途切れたラインはスキップ
-        const dMatch = axis === 'h'
-          ? Math.abs(c.x - last.x)
-          : Math.abs(c.y - last.y);
-        if (dMatch < bestDist) {
-          bestDist = dMatch;
-          bestLine = li;
-        }
-      }
-      if (bestLine >= 0) {
-        lines[bestLine].push(c);
-        usedLines.add(bestLine);
-      } else {
-        lines.push([c]);
-      }
-    }
-  }
-
-  return lines.filter(l => l.length >= 4);
+  return bmp;
 }
 
-// 中心線キャッシュを更新
+// Zhang-Suen 細線化（ビットマップを1ピクセル幅の骨格にする）
+function zhangSuenThin(bmp, w, h) {
+  const g = (x, y) => (x >= 0 && x < w && y >= 0 && y < h) ? bmp[y * w + x] : 0;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let step = 0; step < 2; step++) {
+      const rem = [];
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          if (!g(x, y)) continue;
+          const n = [g(x,y-1), g(x+1,y-1), g(x+1,y), g(x+1,y+1),
+                     g(x,y+1), g(x-1,y+1), g(x-1,y), g(x-1,y-1)];
+          const B = n.reduce((s, v) => s + v, 0);
+          if (B < 2 || B > 6) continue;
+          let A = 0;
+          for (let i = 0; i < 8; i++) if (n[i] === 0 && n[(i+1)%8] === 1) A++;
+          if (A !== 1) continue;
+          if (step === 0) {
+            if (n[0]*n[2]*n[4] !== 0 || n[2]*n[4]*n[6] !== 0) continue;
+          } else {
+            if (n[0]*n[2]*n[6] !== 0 || n[0]*n[4]*n[6] !== 0) continue;
+          }
+          rem.push(y * w + x);
+        }
+      }
+      for (const idx of rem) { bmp[idx] = 0; changed = true; }
+    }
+  }
+}
+
+// 骨格ピクセルを順序付きポリラインに変換
+function traceSkeleton(bmp, w, h) {
+  const vis = new Uint8Array(w * h);
+  const g = (x, y) => (x >= 0 && x < w && y >= 0 && y < h) ? bmp[y * w + x] : 0;
+  const dirs = [[-1,-1],[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0]];
+  const nCount = (x, y) => { let c=0; for (const [dx,dy] of dirs) c += g(x+dx,y+dy); return c; };
+
+  function trace(sx, sy) {
+    const chain = [{x:sx, y:sy}];
+    vis[sy * w + sx] = 1;
+    let cx = sx, cy = sy;
+    while (true) {
+      let found = false;
+      for (const [dx,dy] of dirs) {
+        const nx = cx+dx, ny = cy+dy;
+        if (g(nx,ny) && !vis[ny*w+nx]) {
+          vis[ny*w+nx] = 1;
+          chain.push({x:nx, y:ny});
+          cx = nx; cy = ny;
+          found = true;
+          break;
+        }
+      }
+      if (!found) break;
+    }
+    return chain;
+  }
+
+  const polylines = [];
+  // 端点（近傍1つ）から優先的にたどる
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++)
+      if (g(x,y) && !vis[y*w+x] && nCount(x,y) === 1) {
+        const c = trace(x, y);
+        if (c.length >= 6) polylines.push(c);
+      }
+  // 残りの未訪問ピクセル（ループ等）
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++)
+      if (g(x,y) && !vis[y*w+x]) {
+        const c = trace(x, y);
+        if (c.length >= 6) polylines.push(c);
+      }
+  return polylines;
+}
+
+// 中心線キャッシュを更新（Canvas描画 → 細線化、GLYPH_DATA不要で全漢字対応）
 function ensureCenterCache() {
   const kanji = kanjiInput.value.trim();
-  if (kanji === cachedCenterKanji) return;
+  if (!kanji || kanji === cachedCenterKanji) return;
   cachedCenterKanji = kanji;
   cachedCenterPoints = [];
   cachedCenterLines = [];
 
-  const data = GLYPH_DATA[kanji];
-  if (!data || !data.outline) return;
+  const W = 300, H = 300;
+  const bmp = rasterizeFromFont(kanji, W, H);
+  zhangSuenThin(bmp, W, H);
+  const polylines = traceSkeleton(bmp, W, H);
 
-  const hLines = computeScanLines(data.outline, 'h'); // 水平走査 → 縦画の中心
-  const vLines = computeScanLines(data.outline, 'v'); // 垂直走査 → 横画の中心
-  cachedCenterLines = [...hLines, ...vLines];
-  for (const line of cachedCenterLines) {
-    cachedCenterPoints.push(...line);
-  }
+  // ポリラインを間引き（3px間隔に簡略化）
+  cachedCenterLines = polylines.map(chain => {
+    const s = [chain[0]];
+    for (let i = 1; i < chain.length - 1; i++) {
+      const last = s[s.length - 1];
+      if (Math.hypot(chain[i].x - last.x, chain[i].y - last.y) >= 3) s.push(chain[i]);
+    }
+    s.push(chain[chain.length - 1]);
+    return s;
+  });
+  for (const line of cachedCenterLines) cachedCenterPoints.push(...line);
 }
 
 // 中心線を点線で描画
