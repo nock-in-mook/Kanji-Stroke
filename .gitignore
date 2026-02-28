@@ -1,5 +1,10 @@
 # Cloudflare Wrangler のキャッシュ・一時ファイル
 .wrangler/
 
+# リモート接続用スクリプト（マシン固有のパスが含まれるため）
+remote_bat_*.bat
+remote_start_*.sh
+
 # 一時ファイル
 *.tmp.*
+__pycache__/

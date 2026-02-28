@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>書き順エディタ</title>
+<style>
+  @font-face {
+    font-family: 'Klee One';
+    src: url('fonts/KleeOne-SemiBold.ttf') format('truetype');
+    font-weight: 600;
+    font-display: swap;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { display:flex; flex-direction:column; align-items:center; min-height:100vh; background:#f0f0f0; font-family:sans-serif; padding:20px; }
+
+  /* ヘッダー: 漢字入力 + 画数表示 */
+  .header { display:flex; align-items:center; gap:16px; margin-bottom:16px; flex-wrap:wrap; justify-content:center; }
+  #kanjiInput {
+    font-size:32px; width:64px; text-align:center;
+    border:2px solid #ddd; border-radius:8px; padding:4px;
+    font-family:'Klee One', serif;
+  }
+  #strokeCount { font-size:16px; color:#666; font-weight:700; }
+
+  /* キャンバスエリア */
+  .canvas-area { position:relative; width:300px; height:300px; background:#fff; border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,0.1); overflow:hidden; }
+
+  /* フォント参照文字（薄く表示） */
+  .ref-char { position:absolute; top:0; left:0; width:100%; height:100%; display:flex; align-items:center; justify-content:center;
+    font-family:'Klee One', serif; font-size:250px; font-weight:600; color:rgba(200,200,200,0.4);
+    line-height:1; user-select:none; pointer-events:none; }
+
+  /* SVGを上に重ねる */
+  .stroke-svg { position:absolute; top:0; left:0; width:100%; height:100%; }
+
+  /* ボタン */
+  .controls { margin-top:12px; display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
+  button { padding:10px 18px; font-size:14px; border:none; border-radius:8px; cursor:pointer; background:#FF8E53; color:#fff; font-weight:700; }
+  button:active { background:#e07040; }
+  button.secondary { background:#aaa; }
+  button.danger { background:#e53935; }
+
+  /* JSON出力エリア */
+  #outputArea { display:none; margin-top:16px; width:100%; max-width:400px; }
+  #jsonOutput { width:100%; height:160px; font-size:12px; font-family:monospace; border:1px solid #ddd; border-radius:8px; padding:8px; resize:vertical; }
+  .output-controls { margin-top:8px; display:flex; gap:12px; justify-content:center; }
+
+  /* ヒント */
+  .toggle-label { margin-top:8px; font-size:14px; color:#666; display:flex; align-items:center; gap:8px; }
+  .hint { margin-top:16px; color:#888; font-size:13px; text-align:center; line-height:1.8; max-width:340px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <input id="kanjiInput" type="text" maxlength="1" placeholder="字">
+  <span id="strokeCount">タップして点を配置</span>
+</div>
+
+<div class="canvas-area" id="canvasArea">
+  <!-- フォント参照文字 -->
+  <div class="ref-char" id="refChar"></div>
+
+  <!-- 描画SVG -->
+  <svg id="drawSvg" class="stroke-svg" viewBox="0 0 300 300" style="touch-action:manipulation;">
+    <!-- ガイド十字線 -->
+    <line x1="150" y1="0" x2="150" y2="300" stroke="#eee" stroke-width="0.5" stroke-dasharray="6,6"/>
+    <line x1="0" y1="150" x2="300" y2="150" stroke="#eee" stroke-width="0.5" stroke-dasharray="6,6"/>
+  </svg>
+</div>
+
+<div class="controls">
+  <button onclick="confirmStroke()">画を確定</button>
+  <button class="secondary" onclick="undoPoint()">点を消す</button>
+  <button class="secondary" onclick="undoStroke()">画を消す</button>
+  <button class="danger" onclick="clearAll()">全消し</button>
+</div>
+<div class="controls">
+  <button onclick="exportJSON()">JSON出力</button>
+  <button class="secondary" onclick="togglePoints()">参照を表示</button>
+</div>
+
+<label class="toggle-label">
+  <input type="checkbox" id="centerSnap" checked onchange="drawCenterLines()"> 中心スナップ
+</label>
+
+<div id="outputArea">
+  <textarea id="jsonOutput" readonly></textarea>
+  <div class="output-controls">
+    <button onclick="copyToClipboard()">コピー</button>
+  </div>
+</div>
+
+<div class="hint">
+  タップで点を配置 → 「画を確定」で滑らかな曲線を生成<br>
+  直線の画は2点、曲線は3点以上で
+</div>
+
+<script>
+// --- 定数 ---
+const STROKE_COLORS = [
+  '#e53935', '#1e88e5', '#43a047', '#fb8c00',
+  '#8e24aa', '#00acc1', '#6d4c41', '#546e7a'
+];
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+// --- 状態 ---
+let tapPoints = [];         // 現在の画の配置点 [{x, y}, ...]
+let splineStrokes = [];     // 確定済み [{points: [{x,y}...], path: "M...C..."}]
+let dragIdx = -1;              // ドラッグ中の点インデックス (-1=なし)
+let isDragging = false;        // ドラッグ中フラグ
+
+// --- DOM参照 ---
+const svg = document.getElementById('drawSvg');
+const kanjiInput = document.getElementById('kanjiInput');
+const refChar = document.getElementById('refChar');
+const strokeCountEl = document.getElementById('strokeCount');
+
+// 中心線表示グループ（タップ点の下に描画）
+const centerLineGroup = document.createElementNS(SVG_NS, 'g');
+centerLineGroup.id = 'centerLines';
+centerLineGroup.setAttribute('pointer-events', 'none');
+svg.appendChild(centerLineGroup);
+
+// タップ点・曲線プレビュー用グループ
+const tapGroup = document.createElementNS(SVG_NS, 'g');
+tapGroup.id = 'tapGroup';
+svg.appendChild(tapGroup);
+
+// 中心線キャッシュ
+let cachedCenterKanji = '';
+let cachedCenterPoints = [];  // スナップ用: [{x, y}, ...]
+let cachedCenterLines = [];   // 描画用: [[ {x,y}, ... ], ...]
+
+// ===========================
+// 漢字入力 → フォントオーバーレイ
+// ===========================
+kanjiInput.addEventListener('input', function() {
+  if (this.value.length > 1) {
+    this.value = this.value[this.value.length - 1];
+  }
+  refChar.textContent = this.value;
+  cachedCenterKanji = '';  // キャッシュ無効化
+  drawCenterLines();
+});
+
+// ===========================
+// 座標変換: 画面座標 → SVG座標
+// ===========================
+function getSvgPoint(e) {
+  const rect = svg.getBoundingClientRect();
+  const scaleX = 300 / rect.width;
+  const scaleY = 300 / rect.height;
+  return {
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top) * scaleY
+  };
+}
+
+// ===========================
+// ポインターイベント: タップで点配置 + ドラッグ移動
+// ===========================
+let tapStartPos = null;
+let tapStartTime = 0;
+
+svg.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  svg.setPointerCapture(e.pointerId);
+  tapStartPos = getSvgPoint(e);
+  tapStartTime = Date.now();
+
+  // 既存の点に近いか確認 → ドラッグ開始候補
+  dragIdx = -1;
+  isDragging = false;
+  for (let i = 0; i < tapPoints.length; i++) {
+    const d = Math.hypot(tapPoints[i].x - tapStartPos.x, tapPoints[i].y - tapStartPos.y);
+    if (d < 20) {
+      dragIdx = i;
+      break;
+    }
+  }
+});
+
+svg.addEventListener('pointermove', (e) => {
+  if (dragIdx < 0 || !tapStartPos) return;
+  isDragging = true;
+  const pt = getSvgPoint(e);
+  // 40px上にオフセット（指の下に隠れない）
+  tapPoints[dragIdx] = { x: Math.round(pt.x), y: Math.round(pt.y - 40) };
+  redrawTapUI();
+});
+
+svg.addEventListener('pointerup', (e) => {
+  if (!tapStartPos) return;
+  const pt = getSvgPoint(e);
+
+  if (isDragging && dragIdx >= 0) {
+    // ドラッグ終了 → スナップ適用
+    tapPoints[dragIdx] = applySnap(tapPoints[dragIdx]);
+    redrawTapUI();
+  } else {
+    // タップ判定: 移動が少なく、短時間
+    const dist = Math.hypot(pt.x - tapStartPos.x, pt.y - tapStartPos.y);
+    const elapsed = Date.now() - tapStartTime;
+    if (dist < 15 && elapsed < 500) {
+      let newPt = { x: Math.round(pt.x), y: Math.round(pt.y) };
+      newPt = applySnap(newPt);
+      tapPoints.push(newPt);
+      redrawTapUI();
+      updateStrokeCount();
+    }
+  }
+  tapStartPos = null;
+  dragIdx = -1;
+  isDragging = false;
+});
+
+// タッチ制御: 1本指=タップ、2本指=スクロール＆ピンチズーム
+svg.addEventListener('touchstart', e => {
+  if (e.touches.length === 1) e.preventDefault();
+}, { passive: false });
+svg.addEventListener('touchmove', e => {
+  if (e.touches.length === 1) e.preventDefault();
+}, { passive: false });
+
+// ===========================
+// Catmull-Rom スプライン → SVGパス
+// ===========================
+function catmullRomToPath(points) {
+  if (points.length < 2) return '';
+  if (points.length === 2) {
+    return `M ${points[0].x},${points[0].y} L ${points[1].x},${points[1].y}`;
+  }
+
+  let d = `M ${points[0].x},${points[0].y}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[Math.min(points.length - 1, i + 2)];
+
+    // Catmull-Rom → 3次ベジェの制御点
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+
+    d += ` C ${Math.round(cp1x)},${Math.round(cp1y)} ${Math.round(cp2x)},${Math.round(cp2y)} ${p2.x},${p2.y}`;
+  }
+  return d;
+}
+
+// ===========================
+// タップUI描画
+// ===========================
+function redrawTapUI() {
+  tapGroup.innerHTML = '';
+
+  // 確定済みストローク
+  splineStrokes.forEach((stroke, i) => {
+    const color = STROKE_COLORS[i % STROKE_COLORS.length];
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', stroke.path);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', color);
+    path.setAttribute('stroke-width', '10');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    tapGroup.appendChild(path);
+  });
+
+  // 現在配置中のプレビュー曲線
+  const curColor = STROKE_COLORS[splineStrokes.length % STROKE_COLORS.length];
+  if (tapPoints.length >= 2) {
+    const previewD = catmullRomToPath(tapPoints);
+    const preview = document.createElementNS(SVG_NS, 'path');
+    preview.setAttribute('d', previewD);
+    preview.setAttribute('fill', 'none');
+    preview.setAttribute('stroke', curColor);
+    preview.setAttribute('stroke-width', '10');
+    preview.setAttribute('stroke-linecap', 'round');
+    preview.setAttribute('stroke-linejoin', 'round');
+    preview.setAttribute('stroke-opacity', '0.35');
+    tapGroup.appendChild(preview);
+  }
+
+  // 配置した点（番号付き、ドラッグ中は強調表示）
+  tapPoints.forEach((pt, i) => {
+    const beingDragged = isDragging && i === dragIdx;
+    const circle = document.createElementNS(SVG_NS, 'circle');
+    circle.setAttribute('cx', pt.x);
+    circle.setAttribute('cy', pt.y);
+    circle.setAttribute('r', beingDragged ? '14' : '10');
+    circle.setAttribute('fill', beingDragged ? curColor : 'white');
+    circle.setAttribute('stroke', curColor);
+    circle.setAttribute('stroke-width', '2.5');
+    tapGroup.appendChild(circle);
+
+    const text = document.createElementNS(SVG_NS, 'text');
+    text.setAttribute('x', pt.x);
+    text.setAttribute('y', pt.y + 4);
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('font-size', '11');
+    text.setAttribute('font-weight', '700');
+    text.setAttribute('fill', beingDragged ? 'white' : curColor);
+    text.setAttribute('pointer-events', 'none');
+    text.textContent = i + 1;
+    tapGroup.appendChild(text);
+  });
+}
+
+// ===========================
+// 画の確定・アンドゥ・全消し
+// ===========================
+function confirmStroke() {
+  if (tapPoints.length < 2) { alert('2点以上配置してください'); return; }
+  const path = catmullRomToPath(tapPoints);
+  splineStrokes.push({ points: [...tapPoints], path });
+  tapPoints = [];
+  redrawTapUI();
+  updateStrokeCount();
+}
+
+function undoPoint() {
+  if (tapPoints.length === 0) return;
+  tapPoints.pop();
+  redrawTapUI();
+  updateStrokeCount();
+}
+
+function undoStroke() {
+  if (tapPoints.length > 0) {
+    tapPoints = [];
+  } else if (splineStrokes.length > 0) {
+    // 最後の画を点に戻す（再編集可能）
+    const last = splineStrokes.pop();
+    tapPoints = last.points;
+  }
+  redrawTapUI();
+  updateStrokeCount();
+}
+
+function clearAll() {
+  tapPoints = [];
+  splineStrokes = [];
+  redrawTapUI();
+  updateStrokeCount();
+  document.getElementById('outputArea').style.display = 'none';
+}
+
+function updateStrokeCount() {
+  const n = splineStrokes.length;
+  const pts = tapPoints.length;
+  if (n === 0 && pts === 0) {
+    strokeCountEl.textContent = 'タップして点を配置';
+  } else if (pts > 0) {
+    strokeCountEl.textContent = `${n}画確定 / ${pts}点 配置中`;
+  } else {
+    strokeCountEl.textContent = `${n}画 入力済み`;
+  }
+}
+
+// ===========================
+// 中心線: 走査線方式で事前計算 + 表示 + スナップ
+// ===========================
+
+// 走査線でアウトライン断面の中心点群を計算し、ストロークごとにグループ化
+function computeScanLines(outline, axis) {
+  const STEP = 3;
+  const THRESHOLD = 50; // この幅以下の断面のみ対象
+  const lines = [];      // ストロークごとのポリライン [ [{x,y}, ...], ... ]
+
+  // 走査範囲を決定
+  const idx = axis === 'h' ? 1 : 0;
+  let min = Infinity, max = -Infinity;
+  for (const pt of outline) {
+    min = Math.min(min, pt[idx]);
+    max = Math.max(max, pt[idx]);
+  }
+
+  for (let pos = Math.ceil(min) + 2; pos < max - 1; pos += STEP) {
+    // レイキャストで交点を求める
+    const hits = [];
+    for (let i = 0; i < outline.length; i++) {
+      const [x1, y1] = outline[i];
+      const [x2, y2] = outline[(i + 1) % outline.length];
+      let a1, a2, b1, b2;
+      if (axis === 'h') { a1 = y1; a2 = y2; b1 = x1; b2 = x2; }
+      else              { a1 = x1; a2 = x2; b1 = y1; b2 = y2; }
+
+      if ((a1 <= pos && a2 > pos) || (a2 <= pos && a1 > pos)) {
+        const t = (pos - a1) / (a2 - a1);
+        hits.push(b1 + t * (b2 - b1));
+      }
+    }
+    hits.sort((a, b) => a - b);
+
+    // 連続ペアの中点を計算
+    const centers = [];
+    for (let j = 0; j + 1 < hits.length; j += 2) {
+      const w = hits[j + 1] - hits[j];
+      if (w > 3 && w < THRESHOLD) {
+        const mid = (hits[j] + hits[j + 1]) / 2;
+        if (axis === 'h') centers.push({ x: mid, y: pos });
+        else               centers.push({ x: pos, y: mid });
+      }
+    }
+
+    // 既存ラインとマッチング（最近傍で接続）
+    const usedLines = new Set();
+    for (const c of centers) {
+      let bestLine = -1, bestDist = 15;
+      for (let li = 0; li < lines.length; li++) {
+        if (usedLines.has(li)) continue;
+        const last = lines[li][lines[li].length - 1];
+        const dScan = Math.abs(pos - last[axis === 'h' ? 'y' : 'x']);
+        if (dScan > STEP * 2) continue; // 途切れたラインはスキップ
+        const dMatch = axis === 'h'
+          ? Math.abs(c.x - last.x)
+          : Math.abs(c.y - last.y);
+        if (dMatch < bestDist) {
+          bestDist = dMatch;
+          bestLine = li;
+        }
+      }
+      if (bestLine >= 0) {
+        lines[bestLine].push(c);
+        usedLines.add(bestLine);
+      } else {
+        lines.push([c]);
+      }
+    }
+  }
+
+  return lines.filter(l => l.length >= 4);
+}
+
+// 中心線キャッシュを更新
+function ensureCenterCache() {
+  const kanji = kanjiInput.value.trim();
+  if (kanji === cachedCenterKanji) return;
+  cachedCenterKanji = kanji;
+  cachedCenterPoints = [];
+  cachedCenterLines = [];
+
+  const data = GLYPH_DATA[kanji];
+  if (!data || !data.outline) return;
+
+  const hLines = computeScanLines(data.outline, 'h'); // 水平走査 → 縦画の中心
+  const vLines = computeScanLines(data.outline, 'v'); // 垂直走査 → 横画の中心
+  cachedCenterLines = [...hLines, ...vLines];
+  for (const line of cachedCenterLines) {
+    cachedCenterPoints.push(...line);
+  }
+}
+
+// 中心線を点線で描画
+function drawCenterLines() {
+  centerLineGroup.innerHTML = '';
+  const snap = document.getElementById('centerSnap');
+  if (!snap || !snap.checked) return;
+
+  ensureCenterCache();
+
+  for (const line of cachedCenterLines) {
+    const pts = line.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+    const polyline = document.createElementNS(SVG_NS, 'polyline');
+    polyline.setAttribute('points', pts);
+    polyline.setAttribute('fill', 'none');
+    polyline.setAttribute('stroke', '#FF8E53');
+    polyline.setAttribute('stroke-width', '1.5');
+    polyline.setAttribute('stroke-dasharray', '4,4');
+    polyline.setAttribute('stroke-opacity', '0.6');
+    centerLineGroup.appendChild(polyline);
+  }
+}
+
+// 最近傍の中心点にスナップ
+function applySnap(pt) {
+  const snap = document.getElementById('centerSnap');
+  if (!snap || !snap.checked) return pt;
+  ensureCenterCache();
+  if (cachedCenterPoints.length === 0) return pt;
+
+  let best = null, bestDist = 25;
+  for (const cp of cachedCenterPoints) {
+    const d = Math.hypot(cp.x - pt.x, cp.y - pt.y);
+    if (d < bestDist) {
+      bestDist = d;
+      best = cp;
+    }
+  }
+  return best ? { x: Math.round(best.x), y: Math.round(best.y) } : pt;
+}
+
+// ===========================
+// JSON出力
+// ===========================
+function exportJSON() {
+  const kanji = kanjiInput.value.trim();
+  if (!kanji) { alert('漢字を入力してください'); return; }
+  if (splineStrokes.length === 0) { alert('画を確定してください'); return; }
+
+  const data = {
+    kanji,
+    strokes: splineStrokes.map(s => ({
+      points: s.points,
+      path: s.path
+    }))
+  };
+  const jsonStr = JSON.stringify(data, null, 2);
+  const outputArea = document.getElementById('outputArea');
+  const jsonOutput = document.getElementById('jsonOutput');
+  jsonOutput.value = jsonStr;
+  outputArea.style.display = 'block';
+}
+
+async function copyToClipboard() {
+  const text = document.getElementById('jsonOutput').value;
+  try {
+    await navigator.clipboard.writeText(text);
+    const btn = event.target;
+    const orig = btn.textContent;
+    btn.textContent = 'コピーしました！';
+    setTimeout(() => btn.textContent = orig, 1500);
+  } catch {
+    document.getElementById('jsonOutput').select();
+  }
+}
+
+// ===========================
+// フォントから抽出した頂点データ（参照用）
+// ===========================
+const GLYPH_DATA = {
+  '山': {
+    outline: [
+      [85.5,263.0],[219.8,251.5],[218.2,264.2],[218.0,266.5],
+      [232.2,277.5],[236.2,271.2],[237.8,138.8],[226.8,129.5],
+      [219.5,128.0],[216.8,129.8],[217.8,132.2],[220.5,146.8],
+      [219.8,236.2],[157.0,241.2],[157.0,76.2],[138.2,67.2],
+      [135.0,69.0],[136.2,71.8],[139.8,84.2],[140.8,242.8],
+      [80.5,247.8],[80.0,145.0],[70.8,135.8],[61.8,133.8],
+      [58.8,135.5],[59.8,138.0],[62.8,152.5],[64.5,237.8],
+      [62.2,251.8],[61.5,255.0],[73.0,265.0]
+    ]
+  },
+  '九': {
+    outline: [
+      [265.8,217.2],[265.8,212.2],[262.0,199.5],[256.8,211.5],
+      [249.5,240.5],[219.5,255.2],[196.5,243.2],[197.0,235.5],
+      [207.2,138.2],[208.8,130.5],[197.0,121.2],[193.2,121.5],
+      [145.8,126.0],[150.8,71.2],[150.8,70.8],[131.8,59.2],
+      [128.2,61.5],[128.5,62.8],[131.8,79.0],[131.8,80.5],
+      [127.8,127.8],[78.8,132.2],[72.2,132.5],[59.5,131.2],
+      [58.5,131.0],[57.0,132.5],[57.2,134.0],[71.2,147.5],
+      [79.8,146.8],[125.0,142.8],[41.8,269.0],[36.2,275.0],
+      [39.0,276.8],[129.2,190.2],[143.2,141.0],[190.2,136.8],
+      [180.0,239.5],[179.8,246.0],[218.2,271.8]
+    ]
+  }
+};
+
+// ===========================
+// フォントアウトライン表示（参照用）
+// ===========================
+let pointsVisible = false;
+const pointsGroup = document.createElementNS(SVG_NS, 'g');
+pointsGroup.id = 'glyphPoints';
+pointsGroup.style.display = 'none';
+pointsGroup.setAttribute('pointer-events', 'none');
+svg.appendChild(pointsGroup);
+
+function togglePoints() {
+  pointsVisible = !pointsVisible;
+  if (pointsVisible) {
+    showGlyphOutline();
+    pointsGroup.style.display = '';
+  } else {
+    pointsGroup.style.display = 'none';
+  }
+}
+
+function showGlyphOutline() {
+  pointsGroup.innerHTML = '';
+  const kanji = kanjiInput.value.trim();
+  const data = GLYPH_DATA[kanji];
+  if (!data || !data.outline) return;
+
+  const pts = data.outline.map(p => p.join(',')).join(' ');
+  const poly = document.createElementNS(SVG_NS, 'polygon');
+  poly.setAttribute('points', pts);
+  poly.setAttribute('fill', '#888');
+  poly.setAttribute('fill-opacity', '0.1');
+  poly.setAttribute('stroke', '#aaa');
+  poly.setAttribute('stroke-width', '0.5');
+  pointsGroup.appendChild(poly);
+}
+</script>
+
+</body>
+</html>

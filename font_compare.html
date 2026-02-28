@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>フォント比較 - 書き順エディタ用</title>
+<link href="https://fonts.googleapis.com/css2?family=Klee+One:wght@400;600&family=BIZ+UDMincho&family=Noto+Serif+JP:wght@900&family=Zen+Old+Mincho:wght@700&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#f5f5f5; font-family:sans-serif; padding:20px; }
+  h1 { font-size:18px; color:#333; margin-bottom:8px; text-align:center; }
+  .subtitle { font-size:13px; color:#888; text-align:center; margin-bottom:24px; }
+
+  /* フォントごとのセクション */
+  .font-section {
+    background:#fff; border-radius:12px; padding:20px;
+    margin-bottom:20px; box-shadow:0 2px 10px rgba(0,0,0,0.08);
+  }
+  .font-name {
+    font-size:15px; font-weight:700; color:#333; margin-bottom:4px;
+  }
+  .font-meta {
+    font-size:12px; color:#999; margin-bottom:12px;
+  }
+  .font-meta span { margin-right:12px; }
+  .license-safe { color:#43a047; font-weight:700; }
+
+  /* 漢字表示グリッド */
+  .kanji-grid {
+    display:grid;
+    grid-template-columns:repeat(auto-fill, 100px);
+    gap:8px;
+  }
+  .kanji-cell {
+    width:100px; height:100px;
+    display:flex; align-items:center; justify-content:center;
+    background:#fafafa; border:1px solid #eee; border-radius:8px;
+    font-size:72px; line-height:1; color:#333;
+  }
+
+  /* 注目ポイントのラベル */
+  .label-row {
+    display:grid;
+    grid-template-columns:repeat(auto-fill, 100px);
+    gap:8px; margin-bottom:4px;
+  }
+  .label-cell {
+    width:100px; text-align:center;
+    font-size:10px; color:#999;
+  }
+
+  /* サイズ切り替え */
+  .size-controls {
+    text-align:center; margin-bottom:20px;
+  }
+  .size-controls button {
+    padding:6px 16px; margin:0 4px; font-size:13px;
+    border:1px solid #ddd; border-radius:6px; cursor:pointer;
+    background:#fff; color:#555;
+  }
+  .size-controls button.active {
+    background:#FF8E53; color:#fff; border-color:#FF8E53;
+  }
+
+  /* フォント指定 */
+  .f-klee { font-family:'Klee One', cursive; font-weight:600; }
+  .f-bizud { font-family:'BIZ UDMincho', serif; }
+  .f-noto { font-family:'Noto Serif JP', serif; font-weight:900; }
+  .f-zen { font-family:'Zen Old Mincho', serif; font-weight:700; }
+</style>
+</head>
+<body>
+
+<h1>フォント比較 - 書き順エディタ用</h1>
+<p class="subtitle">とめ・はね・はらいの見え方を比較。同じ漢字を4つのフォントで表示</p>
+
+<div class="size-controls">
+  <button class="active" onclick="setSize(72, this)">大</button>
+  <button onclick="setSize(48, this)">中</button>
+  <button onclick="setSize(36, this)">小</button>
+</div>
+
+<!-- ラベル行 -->
+<div class="label-row">
+  <div class="label-cell">とめ</div>
+  <div class="label-cell">はね</div>
+  <div class="label-cell">はらい</div>
+  <div class="label-cell">はらい</div>
+  <div class="label-cell">折れ+はね</div>
+  <div class="label-cell">曲線</div>
+  <div class="label-cell">横画</div>
+  <div class="label-cell">複合</div>
+</div>
+
+<!-- 表示する漢字（ストロークの特徴がわかるもの） -->
+
+<div class="font-section">
+  <div class="font-name">Klee One SemiBold <span style="font-size:12px;color:#FF8E53;">← おすすめ</span></div>
+  <div class="font-meta">
+    <span>硬筆体（ペン字風）</span>
+    <span>8.3 MB</span>
+    <span class="license-safe">SIL OFL 1.1</span>
+  </div>
+  <div class="kanji-grid">
+    <div class="kanji-cell f-klee">山</div>
+    <div class="kanji-cell f-klee">子</div>
+    <div class="kanji-cell f-klee">人</div>
+    <div class="kanji-cell f-klee">大</div>
+    <div class="kanji-cell f-klee">力</div>
+    <div class="kanji-cell f-klee">九</div>
+    <div class="kanji-cell f-klee">一</div>
+    <div class="kanji-cell f-klee">書</div>
+  </div>
+</div>
+
+<div class="font-section">
+  <div class="font-name">BIZ UD Mincho</div>
+  <div class="font-meta">
+    <span>UD明朝体（モリサワ）</span>
+    <span>5.9 MB</span>
+    <span class="license-safe">SIL OFL 1.1</span>
+  </div>
+  <div class="kanji-grid">
+    <div class="kanji-cell f-bizud">山</div>
+    <div class="kanji-cell f-bizud">子</div>
+    <div class="kanji-cell f-bizud">人</div>
+    <div class="kanji-cell f-bizud">大</div>
+    <div class="kanji-cell f-bizud">力</div>
+    <div class="kanji-cell f-bizud">九</div>
+    <div class="kanji-cell f-bizud">一</div>
+    <div class="kanji-cell f-bizud">書</div>
+  </div>
+</div>
+
+<div class="font-section">
+  <div class="font-name">Noto Serif JP Black</div>
+  <div class="font-meta">
+    <span>明朝体（Google/Adobe）</span>
+    <span>13.6 MB</span>
+    <span class="license-safe">SIL OFL 1.1</span>
+  </div>
+  <div class="kanji-grid">
+    <div class="kanji-cell f-noto">山</div>
+    <div class="kanji-cell f-noto">子</div>
+    <div class="kanji-cell f-noto">人</div>
+    <div class="kanji-cell f-noto">大</div>
+    <div class="kanji-cell f-noto">力</div>
+    <div class="kanji-cell f-noto">九</div>
+    <div class="kanji-cell f-noto">一</div>
+    <div class="kanji-cell f-noto">書</div>
+  </div>
+</div>
+
+<div class="font-section">
+  <div class="font-name">Zen Old Mincho Bold</div>
+  <div class="font-meta">
+    <span>オールド明朝体</span>
+    <span>5.2 MB</span>
+    <span class="license-safe">SIL OFL 1.1</span>
+  </div>
+  <div class="kanji-grid">
+    <div class="kanji-cell f-zen">山</div>
+    <div class="kanji-cell f-zen">子</div>
+    <div class="kanji-cell f-zen">人</div>
+    <div class="kanji-cell f-zen">大</div>
+    <div class="kanji-cell f-zen">力</div>
+    <div class="kanji-cell f-zen">九</div>
+    <div class="kanji-cell f-zen">一</div>
+    <div class="kanji-cell f-zen">書</div>
+  </div>
+</div>
+
+<script>
+function setSize(px, btn) {
+  document.querySelectorAll('.kanji-cell').forEach(el => {
+    el.style.fontSize = px + 'px';
+  });
+  document.querySelectorAll('.size-controls button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+</script>
+
+</body>
+</html>

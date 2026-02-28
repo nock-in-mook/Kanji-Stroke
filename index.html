@@ -4,8 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>漢字書き順ジェネレーター 実験</title>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@900&display=swap" rel="stylesheet">
 <style>
+  @font-face {
+    font-family: 'Klee One';
+    src: url('fonts/KleeOne-SemiBold.ttf') format('truetype');
+    font-weight: 600;
+    font-display: swap;
+  }
   * { margin:0; padding:0; box-sizing:border-box; }
   body { display:flex; flex-direction:column; align-items:center; min-height:100vh; background:#f0f0f0; font-family:sans-serif; padding:20px; }
   h1 { font-size:20px; color:#333; margin-bottom:16px; }
@@ -13,7 +18,7 @@
 
   /* フォントで描画した参照文字（薄く表示） */
   .ref-char { position:absolute; top:0; left:0; width:100%; height:100%; display:flex; align-items:center; justify-content:center;
-    font-family:'Noto Serif JP', serif; font-size:250px; font-weight:900; color:rgba(200,200,200,0.4);
+    font-family:'Klee One', serif; font-size:250px; font-weight:600; color:rgba(200,200,200,0.4);
     line-height:1; user-select:none; pointer-events:none; }
 
   /* ストロークSVGを上に重ねる */
@@ -41,16 +46,16 @@
     <line x1="150" y1="0" x2="150" y2="300" stroke="#eee" stroke-width="0.5" stroke-dasharray="6,6"/>
     <line x1="0" y1="150" x2="300" y2="150" stroke="#eee" stroke-width="0.5" stroke-dasharray="6,6"/>
 
-    <!-- 第1画: 左の縦線（上から下） -->
-    <path id="stroke1" d="M 88,213 L 88,120"
-      fill="none" stroke="#e53935" stroke-width="12" stroke-linecap="round"/>
+    <!-- 第1画: 中央の縦線 -->
+    <path id="stroke1" d="M 156,62 L 155,90 L 163,148 L 163,236"
+      fill="none" stroke="#e53935" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
 
-    <!-- 第2画: 中央の縦線（上端から下端まで、最も長い） -->
-    <path id="stroke2" d="M 150,58 L 150,258"
-      fill="none" stroke="#1e88e5" stroke-width="12" stroke-linecap="round"/>
+    <!-- 第2画: 左の縦線→横線 -->
+    <path id="stroke2" d="M 70,123 L 70,261 L 120,244 L 202,243 L 228,237"
+      fill="none" stroke="#1e88e5" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
 
-    <!-- 第3画: 横線（左→右）→ 右の縦線（下→上）の折れ -->
-    <path id="stroke3" d="M 42,213 L 258,213 L 258,120"
+    <!-- 第3画: 右の縦線 -->
+    <path id="stroke3" d="M 250,114 L 245,141 L 245,255"
       fill="none" stroke="#43a047" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
   </svg>
 </div>
@@ -66,9 +71,13 @@
 </label>
 
 <div class="info">
-  フォント参照（薄いグレー）= Noto Serif JP<br>
-  色付きの線 = AI生成のストロークパス<br>
+  フォント参照（薄いグレー）= Klee One<br>
+  色付きの線 = 手描きのストロークパス<br>
   ずれていたら座標を修正して精度を上げる
+</div>
+
+<div style="margin-top:24px;">
+  <a href="editor.html" style="color:#FF8E53; font-weight:700; font-size:15px;">書き順エディタを開く →</a>
 </div>
 
 <script>
