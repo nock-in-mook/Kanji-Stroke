@@ -1681,9 +1681,12 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                     # 平滑化してから評価
                     kvg_skel_smooth = smooth_path(kvg_skel, window=7)
                     dev_kvg_skel = _avg_dev(kvg_skel_smooth)
-                    # ㇕/㇆タイプはセグメント直線化で大幅改善されるため、
-                    # KVGスナップに小さなボーナス（20%マージン）を付与
-                    accept_threshold = best_dev * 1.2 if is_corner_type else best_dev
+                    # KVGスナップはルーティング不要で密集漢字に強いため
+                    # 全ストロークに10%ボーナス、㇕/㇆には20%ボーナス
+                    if is_corner_type:
+                        accept_threshold = best_dev * 1.2
+                    else:
+                        accept_threshold = best_dev * 1.1
                     if dev_kvg_skel < accept_threshold:
                         best_path = kvg_skel_smooth
                         best_dev = dev_kvg_skel
