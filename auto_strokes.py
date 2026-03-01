@@ -1538,23 +1538,24 @@ def generate_strokes(kanji: str, debug=False) -> dict:
         mid_scaled = [(mx * KVG_SCALE, my * KVG_SCALE) for mx, my in kvg['mid_points']]
         print(f"    始点: ({sx:.1f}, {sy:.1f}) → 終点: ({ex:.1f}, {ey:.1f})")
 
-        # 最寄りのグラフノードを特定
-        start_node = find_nearest_node(nodes, sx, sy)
-        end_node = find_nearest_node(nodes, ex, ey)
+        # 最寄りのグラフノードを特定（骨格ピクセル経由で精度向上）
+        # KVG-骨格Yオフセットがあるため、骨格ピクセル経由の方が正確
+        start_skel = find_nearest_skeleton_pixel(skel, round(sx), round(sy), search_radius=55)
+        end_skel = find_nearest_skeleton_pixel(skel, round(ex), round(ey), search_radius=55)
+        if start_skel:
+            start_node = find_nearest_node(nodes, start_skel[0], start_skel[1], max_dist=30)
+        else:
+            start_node = find_nearest_node(nodes, sx, sy)
+        if end_skel:
+            end_node = find_nearest_node(nodes, end_skel[0], end_skel[1], max_dist=30)
+        else:
+            end_node = find_nearest_node(nodes, ex, ey)
 
-        # ノードが見つからない場合、最寄り骨格ピクセル経由で再探索
+        # フォールバック: 直接KVG座標で探索
         if start_node is None:
-            nearest_skel = find_nearest_skeleton_pixel(skel, sx, sy)
-            if nearest_skel:
-                start_node = find_nearest_node(nodes, nearest_skel[0], nearest_skel[1], max_dist=80)
-                if start_node:
-                    print(f"    始点: 骨格ピクセル({nearest_skel[0]},{nearest_skel[1]})経由でノード検出")
+            start_node = find_nearest_node(nodes, sx, sy, max_dist=80)
         if end_node is None:
-            nearest_skel = find_nearest_skeleton_pixel(skel, ex, ey)
-            if nearest_skel:
-                end_node = find_nearest_node(nodes, nearest_skel[0], nearest_skel[1], max_dist=80)
-                if end_node:
-                    print(f"    終点: 骨格ピクセル({nearest_skel[0]},{nearest_skel[1]})経由でノード検出")
+            end_node = find_nearest_node(nodes, ex, ey, max_dist=80)
 
         if start_node is None or end_node is None:
             print(f"    ⚠ ノードにマッチできず → KVG座標フォールバック")
