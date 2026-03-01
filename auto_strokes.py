@@ -582,6 +582,27 @@ def find_nearest_skeleton_pixel(skel, target_x, target_y, search_radius=80):
     return best
 
 
+def _find_nearest_font_pixel(font_bmp, target_x, target_y, search_radius=15):
+    """font_bmpビットマップ上で座標に最も近いフォントピクセルを返す"""
+    h, w = font_bmp.shape
+    tx, ty = round(target_x), round(target_y)
+    # まず座標自体がフォント内か
+    if 0 <= tx < w and 0 <= ty < h and font_bmp[ty, tx]:
+        return (tx, ty)
+    best = None
+    best_dist = search_radius
+    r = search_radius
+    for dy in range(-r, r + 1):
+        for dx in range(-r, r + 1):
+            nx, ny = tx + dx, ty + dy
+            if 0 <= nx < w and 0 <= ny < h and font_bmp[ny, nx]:
+                d = (dx * dx + dy * dy) ** 0.5
+                if d < best_dist:
+                    best_dist = d
+                    best = (nx, ny)
+    return best
+
+
 def skeleton_pixel_path(skel, start_xy, end_xy, guide_points=None, penalty_weight=0.3, font_bmp=None, used_pixels=None):
     """
     骨格ピクセルレベルのDijkstra経路探索。
@@ -592,42 +613,62 @@ def skeleton_pixel_path(skel, start_xy, end_xy, guide_points=None, penalty_weigh
     """
     h, w = skel.shape
 
-    # 最寄りの骨格ピクセルを見つける
+    # 最寄りの骨格ピクセルを見つける（見つからなければfont_bmpフォールバック）
     start_skel = find_nearest_skeleton_pixel(skel, start_xy[0], start_xy[1], search_radius=30)
+    if not start_skel and font_bmp is not None:
+        start_skel = _find_nearest_font_pixel(font_bmp, start_xy[0], start_xy[1], search_radius=30)
     if not start_skel:
         return None
 
-    # 終点: まず通常の最寄りピクセルを探す
+    # 終点: まず通常の最寄りピクセルを探す（見つからなければfont_bmpフォールバック）
     end_skel = find_nearest_skeleton_pixel(skel, end_xy[0], end_xy[1], search_radius=30)
+    if not end_skel and font_bmp is not None:
+        end_skel = _find_nearest_font_pixel(font_bmp, end_xy[0], end_xy[1], search_radius=30)
     if not end_skel:
         return None
     if start_skel == end_skel:
-        return [start_skel]
+        # 同一ピクセルにスナップしたが、元の座標が離れている場合はfont_bmpで経路探索
+        orig_dist = ((start_xy[0] - end_xy[0]) ** 2 + (start_xy[1] - end_xy[1]) ** 2) ** 0.5
+        if orig_dist > 10 and font_bmp is not None:
+            # font_bmp内の最寄りピクセルをstart/endに設定して再探索
+            start_font = _find_nearest_font_pixel(font_bmp, start_xy[0], start_xy[1])
+            end_font = _find_nearest_font_pixel(font_bmp, end_xy[0], end_xy[1])
+            if start_font and end_font and start_font != end_font:
+                start_skel = start_font
+                end_skel = end_font
+                # font_bmpのみの経路探索に切り替え（骨格不要）
+            else:
+                return [start_skel]
+        else:
+            return [start_skel]
 
     # 始点コンポーネント内で終点に最も近いピクセルを優先（切断対策）
-    from collections import deque as _deque
-    _visited = set()
-    _queue = _deque([start_skel])
-    _visited.add(start_skel)
-    while _queue:
-        _cx, _cy = _queue.popleft()
-        for _dx, _dy in DIRS:
-            _nx, _ny = _cx + _dx, _cy + _dy
-            if 0 <= _nx < w and 0 <= _ny < h and skel[_ny, _nx] and (_nx, _ny) not in _visited:
-                _visited.add((_nx, _ny))
-                _queue.append((_nx, _ny))
+    # ただし始点が骨格上にない場合（font_bmpフォールバック）はスキップ
+    start_on_skel = bool(skel[start_skel[1], start_skel[0]])
+    if start_on_skel:
+        from collections import deque as _deque
+        _visited = set()
+        _queue = _deque([start_skel])
+        _visited.add(start_skel)
+        while _queue:
+            _cx, _cy = _queue.popleft()
+            for _dx, _dy in DIRS:
+                _nx, _ny = _cx + _dx, _cy + _dy
+                if 0 <= _nx < w and 0 <= _ny < h and skel[_ny, _nx] and (_nx, _ny) not in _visited:
+                    _visited.add((_nx, _ny))
+                    _queue.append((_nx, _ny))
 
-    if end_skel not in _visited:
-        # 終点が別コンポーネント → 始点コンポーネント内で最寄りを探す
-        best_end = start_skel
-        best_d = float('inf')
-        tx, ty = end_xy
-        for px, py in _visited:
-            d = ((px - tx) ** 2 + (py - ty) ** 2) ** 0.5
-            if d < best_d:
-                best_d = d
-                best_end = (px, py)
-        end_skel = best_end
+        if end_skel not in _visited:
+            # 終点が別コンポーネント → 始点コンポーネント内で最寄りを探す
+            best_end = start_skel
+            best_d = float('inf')
+            tx, ty = end_xy
+            for px, py in _visited:
+                d = ((px - tx) ** 2 + (py - ty) ** 2) ** 0.5
+                if d < best_d:
+                    best_d = d
+                    best_end = (px, py)
+            end_skel = best_end
 
     # ガイドポイントからの最小距離キャッシュ
     guide_cache = {}
@@ -1250,6 +1291,46 @@ def generate_strokes(kanji: str, debug=False) -> dict:
         print(f"    始点ノード: [{start_node['id']}]({start_node['x']},{start_node['y']}) {start_node['type']}")
         print(f"    終点ノード: [{end_node['id']}]({end_node['x']},{end_node['y']}) {end_node['type']}")
 
+        # 始点=終点の場合 → 即座にfont_bmpピクセル経路に切り替え（短い㇔点画で頻発）
+        if start_node['id'] == end_node['id']:
+            print(f"    始点=終点 → font_bmpピクセル経路を試行")
+            pixel_path = skeleton_pixel_path(
+                skel, (round(sx), round(sy)), (round(ex), round(ey)),
+                guide_points=None, penalty_weight=0.3, font_bmp=bmp,
+                used_pixels=used_pixels
+            )
+            if pixel_path and len(pixel_path) >= 2:
+                print(f"    font_bmpピクセル経路: {len(pixel_path)}px")
+                record_used_edges(pixel_path)
+                path_pixels_final = smooth_path(pixel_path, window=5)
+                path_pixels_final = clip_to_outline(path_pixels_final, bmp)
+                simplified = rdp_simplify(path_pixels_final, epsilon=2.0)
+                simplified = remove_zigzags(simplified)
+                simplified = fit_line_if_straight(simplified, threshold=4.0)
+                simplified = clip_to_outline(simplified, bmp)
+                print(f"    経路: {len(pixel_path)}px → {len(simplified)}点")
+                pts = [{'x': p[0], 'y': p[1]} for p in simplified]
+                path_d = f"M {simplified[0][0]},{simplified[0][1]}"
+                for p in simplified[1:]:
+                    path_d += f" L {p[0]},{p[1]}"
+                result_strokes.append({
+                    'points': pts,
+                    'path': path_d,
+                    'taper': should_taper(kvg['type'])
+                })
+                continue
+            else:
+                # font_bmpでも失敗 → KVG座標フォールバック
+                print(f"    ⚠ font_bmpでも経路なし → KVG座標フォールバック")
+                pts = [(round(sx), round(sy)), (round(ex), round(ey))]
+                path_d = f"M {pts[0][0]},{pts[0][1]} L {pts[1][0]},{pts[1][1]}"
+                result_strokes.append({
+                    'points': [{'x': p[0], 'y': p[1]} for p in pts],
+                    'path': path_d,
+                    'taper': should_taper(kvg['type'])
+                })
+                continue
+
         # branch node → end node 延長
         # KVGの始点→終点方向ベクトル
         kvg_dx = ex - sx
@@ -1313,19 +1394,50 @@ def generate_strokes(kanji: str, debug=False) -> dict:
 
         # 経路長バリデーション: 迂回しすぎならピクセルレベルで再試行
         kvg_dist = ((sx - ex) ** 2 + (sy - ey) ** 2) ** 0.5
-        if path_pixels and kvg_dist > 15 and len(path_pixels) > kvg_dist * 3:
+        if path_pixels and kvg_dist > 15 and len(path_pixels) > kvg_dist * 2.5:
             ratio = len(path_pixels) / kvg_dist
             print(f"    ⚠ 経路迂回 ({len(path_pixels)}px vs {kvg_dist:.0f}px直線, 比率{ratio:.1f}x)")
             alt_path = skeleton_pixel_path(
                 skel, (round(sx), round(sy)), (round(ex), round(ey)),
-                guide_points=guide_points, penalty_weight=0.8, font_bmp=bmp,
+                guide_points=guide_points, penalty_weight=1.5, font_bmp=bmp,
                 used_pixels=used_pixels
             )
             if alt_path and len(alt_path) >= 2:
                 alt_ratio = len(alt_path) / kvg_dist
-                if alt_ratio < ratio * 0.7:  # 30%以上短縮されたら切り替え
+                if alt_ratio < ratio * 0.85:  # 15%以上短縮されたら切り替え
                     print(f"    → ピクセル経路に切替 ({len(alt_path)}px, 比率{alt_ratio:.1f}x)")
                     path_pixels = alt_path
+
+        # KVG偏差チェック: 経路がKVGガイドから大きく外れていたらピクセル経路に切替
+        if path_pixels and len(path_pixels) >= 5 and guide_points and len(guide_points) >= 2:
+            # パス上の代表点（10点サンプリング）のKVGからの平均距離
+            step = max(1, len(path_pixels) // 10)
+            samples = path_pixels[::step]
+            total_dev = 0
+            for px, py in samples:
+                min_d = min(((px - gx) ** 2 + (py - gy) ** 2) ** 0.5 for gx, gy in guide_points)
+                total_dev += min_d
+            avg_dev = total_dev / len(samples)
+            # 平均偏差が20px以上ならKVGから大きく外れている
+            if avg_dev > 20:
+                print(f"    ⚠ KVG偏差大 (平均{avg_dev:.1f}px) → ピクセル経路を試行")
+                alt_path = skeleton_pixel_path(
+                    skel, (round(sx), round(sy)), (round(ex), round(ey)),
+                    guide_points=guide_points, penalty_weight=1.5, font_bmp=bmp,
+                    used_pixels=used_pixels
+                )
+                if alt_path and len(alt_path) >= 2:
+                    # ピクセル経路のKVG偏差を計算
+                    step2 = max(1, len(alt_path) // 10)
+                    samples2 = alt_path[::step2]
+                    total_dev2 = sum(
+                        min(((px - gx) ** 2 + (py - gy) ** 2) ** 0.5 for gx, gy in guide_points)
+                        for px, py in samples2
+                    )
+                    avg_dev2 = total_dev2 / len(samples2)
+                    if avg_dev2 < avg_dev * 0.7:  # 30%以上偏差が改善されたら切替
+                        print(f"    → ピクセル経路に切替 (偏差{avg_dev:.1f}→{avg_dev2:.1f}px)")
+                        path_pixels = alt_path
 
         # フォールバック2: ピクセルレベルDijkstra（グラフ切断時）
         if path_pixels is None or len(path_pixels) < 2:
