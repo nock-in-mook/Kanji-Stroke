@@ -1944,26 +1944,36 @@ def generate_strokes(kanji: str, debug=False) -> dict:
         # 台形化を防止: 角点を調整して完全な直角を作る
         # ㇕/㇆ は漢字では常に直角（水平→垂直 or 垂直→水平）
         if any(c in stroke_type for c in ['㇕', '㇆']) and len(simplified) >= 3:
-            # 角点を見つける（内部点で最大の方向変化）
+            # 角点を見つける（H/V遷移を形成する点を優先）
+            # start→ci方向とci→end方向でH/Vが切り替わる点が真の角
             best_ci = None
             best_angle_change = 0
             for ci in range(1, len(simplified) - 1):
-                prev = simplified[ci - 1]
-                curr = simplified[ci]
-                nxt = simplified[ci + 1]
-                angle_in = math.atan2(curr[1] - prev[1], curr[0] - prev[0])
-                angle_out = math.atan2(nxt[1] - curr[1], nxt[0] - curr[0])
-                change = abs(math.degrees(angle_out - angle_in))
-                if change > 180:
-                    change = 360 - change
-                if change > best_angle_change:
-                    best_angle_change = change
-                    best_ci = ci
-            if best_ci is not None and best_angle_change > 30:
+                # start→ciのグローバル方向
+                dx_s = simplified[ci][0] - simplified[0][0]
+                dy_s = simplified[ci][1] - simplified[0][1]
+                # ci→endのグローバル方向
+                dx_e = simplified[-1][0] - simplified[ci][0]
+                dy_e = simplified[-1][1] - simplified[ci][1]
+                s_is_h = abs(dx_s) > abs(dy_s)
+                e_is_h = abs(dx_e) > abs(dy_e)
+                if s_is_h != e_is_h:  # H/V遷移がある点のみ候補
+                    prev = simplified[ci - 1]
+                    curr = simplified[ci]
+                    nxt = simplified[ci + 1]
+                    angle_in = math.atan2(curr[1] - prev[1], curr[0] - prev[0])
+                    angle_out = math.atan2(nxt[1] - curr[1], nxt[0] - curr[0])
+                    change = abs(math.degrees(angle_out - angle_in))
+                    if change > 180:
+                        change = 360 - change
+                    if change > best_angle_change:
+                        best_angle_change = change
+                        best_ci = ci
+            if best_ci is not None and best_angle_change > 20:
                 start = simplified[0]
                 corner = simplified[best_ci]
                 end = simplified[-1]
-                # セグメント方向判定
+                # セグメント方向判定（start→corner, corner→end）
                 dx1 = corner[0] - start[0]
                 dy1 = corner[1] - start[1]
                 dx2 = end[0] - corner[0]
