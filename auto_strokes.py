@@ -603,12 +603,14 @@ def _find_nearest_font_pixel(font_bmp, target_x, target_y, search_radius=15):
     return best
 
 
-def skeleton_pixel_path(skel, start_xy, end_xy, guide_points=None, penalty_weight=0.3, font_bmp=None, used_pixels=None):
+def skeleton_pixel_path(skel, start_xy, end_xy, guide_points=None, penalty_weight=0.3,
+                         font_bmp=None, used_pixels=None, off_skeleton_cost=8.0):
     """
     骨格ピクセルレベルのDijkstra経路探索。
     グラフ構造に依存せず、骨格ピクセルを直接通る。
     guide_pointsからの距離でペナルティを付け、KVGパスに沿った経路を優先。
-    font_bmpが指定されている場合、骨格ギャップをフォント内ピクセルで橋渡し（高コスト）。
+    font_bmpが指定されている場合、骨格ギャップをフォント内ピクセルで橋渡し。
+    off_skeleton_cost: 骨格外フォント内ピクセルのコスト倍率（低いとフォントピクセル経由を許容）。
     used_pixels: 前のストロークが使用したピクセル集合 → 追加ペナルティ。
     """
     h, w = skel.shape
@@ -684,8 +686,8 @@ def skeleton_pixel_path(skel, start_xy, end_xy, guide_points=None, penalty_weigh
         return guide_cache[key]
 
     # Dijkstra on skeleton pixels（フォントビットマップで橋渡し可能）
-    OFF_SKELETON_COST = 8.0  # 骨格外フォント内ピクセルのコスト倍率
-    USED_PIXEL_COST = 3.0    # 使用済みピクセルのコスト倍率
+    OFF_SKELETON_COST = off_skeleton_cost  # 骨格外フォント内ピクセルのコスト倍率
+    USED_PIXEL_COST = 2.0    # 使用済みピクセルのコスト倍率
     dist = {start_skel: 0.0}
     prev = {start_skel: None}
     pq = [(0.0, start_skel)]
@@ -733,6 +735,46 @@ def skeleton_pixel_path(skel, start_xy, end_xy, guide_points=None, penalty_weigh
                 heapq.heappush(pq, (nd, npos))
 
     return None
+
+
+def pixel_path_with_waypoints(skel, start_xy, end_xy, waypoints, guide_points=None,
+                               penalty_weight=3.0, font_bmp=None, used_pixels=None,
+                               off_skeleton_cost=3.0):
+    """
+    ウェイポイント経由のピクセルレベル経路探索。
+    各セグメントを個別にDijkstraでルーティングし、結合する。
+    waypointsが正しい中間点を通過するよう強制するため、
+    グラフレベルでは間違った枝を選ぶケースでも正確な経路が得られる。
+    off_skeleton_cost=3.0: 骨格外フォントピクセルのコストを低くし、
+    ガイドに沿ったフォントピクセル経由のルートを許容する。
+    """
+    if not waypoints:
+        return skeleton_pixel_path(skel, start_xy, end_xy, guide_points=guide_points,
+                                    penalty_weight=penalty_weight, font_bmp=font_bmp,
+                                    used_pixels=used_pixels, off_skeleton_cost=off_skeleton_cost)
+
+    # ルートポイント: 始点 → WP1 → WP2 → ... → 終点
+    route_pts = [start_xy] + [(round(wx), round(wy)) for wx, wy in waypoints] + [end_xy]
+
+    all_pixels = []
+    for i in range(len(route_pts) - 1):
+        seg = skeleton_pixel_path(
+            skel, route_pts[i], route_pts[i + 1],
+            guide_points=guide_points, penalty_weight=penalty_weight,
+            font_bmp=font_bmp, used_pixels=used_pixels,
+            off_skeleton_cost=off_skeleton_cost
+        )
+        if seg is None or len(seg) < 1:
+            return None
+        # 重複接続点を除去
+        if all_pixels and seg:
+            if (all_pixels[-1] == seg[0] or
+                (abs(all_pixels[-1][0] - seg[0][0]) <= 1 and
+                 abs(all_pixels[-1][1] - seg[0][1]) <= 1)):
+                seg = seg[1:]
+        all_pixels.extend(seg)
+
+    return all_pixels if len(all_pixels) >= 2 else None
 
 
 def find_nearest_node(nodes, target_x, target_y, max_dist=50):
@@ -1408,55 +1450,82 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                     print(f"    → ピクセル経路に切替 ({len(alt_path)}px, 比率{alt_ratio:.1f}x)")
                     path_pixels = alt_path
 
-        # 短いストロークはピクセルパスの方が正確（密集部で効果的）
-        if path_pixels and kvg_dist > 5 and kvg_dist < 40 and guide_points and len(guide_points) >= 2:
-            alt_path = skeleton_pixel_path(
+        # 常時比較: 現在経路 vs ピクセル経路 vs ウェイポイント付きピクセル経路
+        if path_pixels and len(path_pixels) >= 2 and guide_points and len(guide_points) >= 2:
+            def _avg_dev(ppath):
+                step = max(1, len(ppath) // 10)
+                samps = ppath[::step]
+                return sum(min(((px-gx)**2+(py-gy)**2)**0.5 for gx,gy in guide_points) for px,py in samps) / len(samps)
+
+            dev_current = _avg_dev(path_pixels)
+            best_path = path_pixels
+            best_dev = dev_current
+
+            # 候補1: ピクセル経路（ウェイポイントなし）
+            alt_plain = skeleton_pixel_path(
                 skel, (round(sx), round(sy)), (round(ex), round(ey)),
-                guide_points=guide_points, penalty_weight=1.5, font_bmp=bmp,
+                guide_points=guide_points, penalty_weight=2.5, font_bmp=bmp,
                 used_pixels=used_pixels
             )
-            if alt_path and len(alt_path) >= 2:
-                # ピクセルパスのKVG偏差を比較して良い方を選択
-                def _avg_deviation(ppath):
-                    step = max(1, len(ppath) // 8)
-                    samps = ppath[::step]
-                    return sum(min(((px-gx)**2+(py-gy)**2)**0.5 for gx,gy in guide_points) for px,py in samps) / len(samps)
-                dev_graph = _avg_deviation(path_pixels)
-                dev_pixel = _avg_deviation(alt_path)
-                if dev_pixel < dev_graph * 0.9:  # 10%以上偏差改善
-                    print(f"    短ストローク最適化: 偏差{dev_graph:.1f}→{dev_pixel:.1f}px")
-                    path_pixels = alt_path
+            if alt_plain and len(alt_plain) >= 2:
+                dev_plain = _avg_dev(alt_plain)
+                if dev_plain < best_dev:
+                    best_path = alt_plain
+                    best_dev = dev_plain
 
-        # KVG偏差チェック: 経路がKVGガイドから大きく外れていたらピクセル経路に切替
-        if path_pixels and len(path_pixels) >= 5 and guide_points and len(guide_points) >= 2:
-            # パス上の代表点（10点サンプリング）のKVGからの平均距離
-            step = max(1, len(path_pixels) // 10)
-            samples = path_pixels[::step]
-            total_dev = 0
-            for px, py in samples:
-                min_d = min(((px - gx) ** 2 + (py - gy) ** 2) ** 0.5 for gx, gy in guide_points)
-                total_dev += min_d
-            avg_dev = total_dev / len(samples)
-            # 平均偏差が15px以上ならKVGから大きく外れている
-            if avg_dev > 15:
-                print(f"    ⚠ KVG偏差大 (平均{avg_dev:.1f}px) → ピクセル経路を試行")
-                alt_path = skeleton_pixel_path(
+            # 候補2: ウェイポイント経由ピクセル経路（KVG中間点を強制経由）
+            all_kvg_pts = [(round(px * KVG_SCALE), round(py * KVG_SCALE))
+                           for px, py in kvg.get('all_points', [])]
+            if len(all_kvg_pts) >= 4:
+                # 4分割点をウェイポイントとして使用
+                wp_pixel = []
+                for frac in [0.25, 0.5, 0.75]:
+                    idx = int(len(all_kvg_pts) * frac)
+                    wp_pixel.append(all_kvg_pts[idx])
+                alt_wp = pixel_path_with_waypoints(
                     skel, (round(sx), round(sy)), (round(ex), round(ey)),
-                    guide_points=guide_points, penalty_weight=1.5, font_bmp=bmp,
-                    used_pixels=used_pixels
+                    wp_pixel, guide_points=guide_points, penalty_weight=8.0,
+                    font_bmp=bmp, used_pixels=used_pixels
                 )
-                if alt_path and len(alt_path) >= 2:
-                    # ピクセル経路のKVG偏差を計算
-                    step2 = max(1, len(alt_path) // 10)
-                    samples2 = alt_path[::step2]
-                    total_dev2 = sum(
-                        min(((px - gx) ** 2 + (py - gy) ** 2) ** 0.5 for gx, gy in guide_points)
-                        for px, py in samples2
-                    )
-                    avg_dev2 = total_dev2 / len(samples2)
-                    if avg_dev2 < avg_dev * 0.7:  # 30%以上偏差が改善されたら切替
-                        print(f"    → ピクセル経路に切替 (偏差{avg_dev:.1f}→{avg_dev2:.1f}px)")
-                        path_pixels = alt_path
+                if alt_wp and len(alt_wp) >= 2:
+                    dev_wp = _avg_dev(alt_wp)
+                    if dev_wp < best_dev:
+                        best_path = alt_wp
+                        best_dev = dev_wp
+
+            # 候補3: KVGパス直接クリッピング（偏差が大きすぎる場合の救済）
+            if best_dev > 15 and all_kvg_pts and len(all_kvg_pts) >= 2:
+                kvg_clipped = clip_to_outline(all_kvg_pts, bmp)
+                if len(kvg_clipped) >= 2:
+                    # KVGクリッピングパスは骨格から外れることがあるので
+                    # 骨格への平均距離でペナルティ付き評価
+                    def _skel_dist(ppath):
+                        step = max(1, len(ppath) // 10)
+                        samps = ppath[::step]
+                        total = 0
+                        for px, py in samps:
+                            if 0 <= px < W and 0 <= py < H and skel[py, px]:
+                                total += 0  # 骨格上は0
+                            else:
+                                # 最寄り骨格ピクセルまでの距離（簡易）
+                                total += 3  # 固定ペナルティ
+                        return total / len(samps)
+                    dev_kvg_clip = _avg_dev(kvg_clipped)
+                    skel_penalty = _skel_dist(kvg_clipped)
+                    # KVGクリッピングは偏差ほぼ0だが骨格距離ペナルティを加算
+                    effective_dev = dev_kvg_clip + skel_penalty
+                    if effective_dev < best_dev:
+                        best_path = kvg_clipped
+                        best_dev = effective_dev
+                        print(f"    KVGクリッピング候補: 偏差{dev_kvg_clip:.1f}+骨格{skel_penalty:.1f}={effective_dev:.1f}px")
+
+            # 改善があれば切替
+            if best_dev < dev_current * 0.85:
+                print(f"    最適経路選択: 偏差{dev_current:.1f}→{best_dev:.1f}px")
+                path_pixels = best_path
+            elif dev_current > 12 and best_dev < dev_current:
+                print(f"    高偏差改善: 偏差{dev_current:.1f}→{best_dev:.1f}px")
+                path_pixels = best_path
 
         # フォールバック2: ピクセルレベルDijkstra（グラフ切断時）
         if path_pixels is None or len(path_pixels) < 2:
