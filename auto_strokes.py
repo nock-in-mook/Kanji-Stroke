@@ -1117,6 +1117,47 @@ def interpolate_points(points, step=2.0):
     return result
 
 
+def find_corner_point(points, min_angle_change=50):
+    """
+    ポイント列の中から最も鋭い角（方向変化が大きい点）を検出。
+    始点→候補点と候補点→終点の方向差で判定（グローバル方向変化）。
+    min_angle_change: 角とみなす最小角度変化（度）。
+    returns: (corner_index, angle_degrees) or (None, 0)
+    """
+    if len(points) < 5:
+        return None, 0
+
+    import math
+    best_idx = None
+    best_angle = 0
+    sx, sy = points[0]
+    ex, ey = points[-1]
+    # 検索範囲: 20%〜80%（端は除外）
+    margin = max(2, len(points) // 5)
+    for i in range(margin, len(points) - margin):
+        px, py = points[i]
+        # 始点→候補点の方向
+        dx_in = px - sx
+        dy_in = py - sy
+        # 候補点→終点の方向
+        dx_out = ex - px
+        dy_out = ey - py
+        len_in = (dx_in ** 2 + dy_in ** 2) ** 0.5
+        len_out = (dx_out ** 2 + dy_out ** 2) ** 0.5
+        if len_in < 3 or len_out < 3:
+            continue
+        cos_angle = (dx_in * dx_out + dy_in * dy_out) / (len_in * len_out)
+        cos_angle = max(-1, min(1, cos_angle))
+        angle_deg = math.degrees(math.acos(cos_angle))
+        if angle_deg > best_angle:
+            best_angle = angle_deg
+            best_idx = i
+
+    if best_angle >= min_angle_change:
+        return best_idx, best_angle
+    return None, 0
+
+
 def kvg_skeleton_snap_path(all_kvg_pts, skel, font_bmp):
     """
     KVGポイントを骨格ピクセルにスナップした直接経路。
@@ -1128,13 +1169,16 @@ def kvg_skeleton_snap_path(all_kvg_pts, skel, font_bmp):
 
     snapped = []
     for kx, ky in all_kvg_pts:
+        # まず近距離でスナップ、失敗したら広範囲で再試行
         sp = find_nearest_skeleton_pixel(skel, kx, ky, search_radius=15)
+        if not sp:
+            sp = find_nearest_skeleton_pixel(skel, kx, ky, search_radius=30)
         if sp:
             if not snapped or sp != snapped[-1]:
                 snapped.append(sp)
         else:
-            # 骨格が見つからない → フォント内最寄り
-            fp = _find_nearest_font_pixel(font_bmp, kx, ky, search_radius=15)
+            # 骨格が見つからない → フォント内最寄り（広範囲）
+            fp = _find_nearest_font_pixel(font_bmp, kx, ky, search_radius=30)
             if fp and (not snapped or fp != snapped[-1]):
                 snapped.append(fp)
 
@@ -1208,13 +1252,15 @@ def fit_line_if_straight(points, threshold=4.0):
     ax, ay = points[0]
     bx, by = points[-1]
 
-    # 方向検出: 横棒/縦棒は閾値2倍
+    # 方向検出: 横棒/縦棒は閾値を段階的に引き上げ
     dx, dy = abs(bx - ax), abs(by - ay)
     total_len = (dx * dx + dy * dy) ** 0.5
     effective_threshold = threshold
     if total_len > 20 and max(dx, dy) > 0:
         angle_ratio = min(dx, dy) / max(dx, dy)
-        if angle_ratio < 0.35:  # ~19度以内 → 横棒/縦棒
+        if angle_ratio < 0.15:  # ~8.5度以内 → ほぼ完全な横棒/縦棒
+            effective_threshold = threshold * 3
+        elif angle_ratio < 0.35:  # ~19度以内 → 横棒/縦棒
             effective_threshold = threshold * 2
 
     max_dev = 0
@@ -1635,10 +1681,51 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                     # 平滑化してから評価
                     kvg_skel_smooth = smooth_path(kvg_skel, window=7)
                     dev_kvg_skel = _avg_dev(kvg_skel_smooth)
-                    if dev_kvg_skel < best_dev:
+                    # ㇕/㇆タイプはセグメント直線化で大幅改善されるため、
+                    # KVGスナップに小さなボーナス（20%マージン）を付与
+                    accept_threshold = best_dev * 1.2 if is_corner_type else best_dev
+                    if dev_kvg_skel < accept_threshold:
                         best_path = kvg_skel_smooth
                         best_dev = dev_kvg_skel
                         print(f"    KVG骨格スナップ候補: 偏差{dev_kvg_skel:.1f}px")
+
+            # 候補5: ㇕/㇆角分割ルーティング（角点で2セグメントに分割）
+            if is_corner_type and all_kvg_pts and len(all_kvg_pts) >= 6:
+                corner_idx, corner_angle = find_corner_point(all_kvg_pts)
+                if corner_idx is not None:
+                    corner_pt = all_kvg_pts[corner_idx]
+                    # 角点を骨格にスナップ
+                    corner_skel = find_nearest_skeleton_pixel(skel, corner_pt[0], corner_pt[1], search_radius=15)
+                    if corner_skel is None:
+                        corner_skel = _find_nearest_font_pixel(bmp, corner_pt[0], corner_pt[1], search_radius=15)
+                    if corner_skel is None:
+                        corner_skel = corner_pt
+                    # セグメント1: 始点→角点
+                    seg1_guide = [(round(p[0]), round(p[1])) for p in all_kvg_pts[:corner_idx+1]]
+                    seg1 = skeleton_pixel_path(
+                        skel, (round(sx), round(sy)), corner_skel,
+                        guide_points=seg1_guide, penalty_weight=5.0,
+                        font_bmp=bmp, used_pixels=used_pixels
+                    )
+                    # セグメント2: 角点→終点
+                    seg2_guide = [(round(p[0]), round(p[1])) for p in all_kvg_pts[corner_idx:]]
+                    seg2 = skeleton_pixel_path(
+                        skel, corner_skel, (round(ex), round(ey)),
+                        guide_points=seg2_guide, penalty_weight=5.0,
+                        font_bmp=bmp, used_pixels=used_pixels
+                    )
+                    if seg1 and seg2 and len(seg1) >= 2 and len(seg2) >= 2:
+                        # 接続点の重複除去して結合
+                        combined = list(seg1)
+                        if combined[-1] == seg2[0]:
+                            combined.extend(seg2[1:])
+                        else:
+                            combined.extend(seg2)
+                        dev_seg = _avg_dev(combined)
+                        if dev_seg < best_dev:
+                            best_path = combined
+                            best_dev = dev_seg
+                            print(f"    角分割ルーティング候補: 角度{corner_angle:.0f}° 偏差{dev_seg:.1f}px")
 
             # 改善があれば切替（閾値を緩和: 10%改善 or 高偏差時は任意改善）
             if best_dev < dev_current * 0.90:
@@ -1695,6 +1782,33 @@ def generate_strokes(kanji: str, debug=False) -> dict:
         simplified = remove_lateral_bumps(simplified, threshold=6.0)
         # 6. 直線フィット（ほぼ直線なら2点に、閾値を緩和して横棒のガタつき解消）
         simplified = fit_line_if_straight(simplified, threshold=8.0)
+        # 6b. ㇕/㇆セグメント別直線化（KVG角点で分割して各辺を直線化）
+        stroke_type = kvg.get('type', '')
+        if any(c in stroke_type for c in ['㇕', '㇆']) and len(simplified) >= 3:
+            # KVGのall_pointsから角点を検出
+            _all_kvg = [(round(px * KVG_SCALE), round(py * KVG_SCALE))
+                        for px, py in kvg.get('all_points', [])]
+            kvg_corner_idx, kvg_corner_angle = find_corner_point(_all_kvg, min_angle_change=40)
+            if kvg_corner_idx is not None:
+                kvg_corner = _all_kvg[kvg_corner_idx]
+                # simplified内でKVG角点に最も近い点を探す
+                best_si = None
+                best_d = float('inf')
+                for si in range(1, len(simplified) - 1):
+                    d = ((simplified[si][0] - kvg_corner[0]) ** 2 +
+                         (simplified[si][1] - kvg_corner[1]) ** 2) ** 0.5
+                    if d < best_d:
+                        best_d = d
+                        best_si = si
+                if best_si is not None and best_d < 30:
+                    seg1 = simplified[:best_si + 1]
+                    seg2 = simplified[best_si:]
+                    seg1_straight = fit_line_if_straight(seg1, threshold=18.0)
+                    seg2_straight = fit_line_if_straight(seg2, threshold=18.0)
+                    if seg2_straight and seg2_straight[0] == seg1_straight[-1]:
+                        simplified = list(seg1_straight) + list(seg2_straight[1:])
+                    else:
+                        simplified = list(seg1_straight) + list(seg2_straight)
         # 7. 最終クリッピング（RDP後のポイントもアウトライン内に）
         simplified = clip_to_outline(simplified, bmp)
         print(f"    経路: {len(path_pixels)}px → {len(simplified)}点")
