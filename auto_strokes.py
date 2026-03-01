@@ -1117,6 +1117,35 @@ def interpolate_points(points, step=2.0):
     return result
 
 
+def kvg_skeleton_snap_path(all_kvg_pts, skel, font_bmp):
+    """
+    KVGポイントを骨格ピクセルにスナップした直接経路。
+    骨格グラフのルーティングに依存せず、KVGの方向知識を直接活用。
+    骨格が見つからない場合はフォント内最寄りピクセルにフォールバック。
+    """
+    if len(all_kvg_pts) < 2:
+        return None
+
+    snapped = []
+    for kx, ky in all_kvg_pts:
+        sp = find_nearest_skeleton_pixel(skel, kx, ky, search_radius=15)
+        if sp:
+            if not snapped or sp != snapped[-1]:
+                snapped.append(sp)
+        else:
+            # 骨格が見つからない → フォント内最寄り
+            fp = _find_nearest_font_pixel(font_bmp, kx, ky, search_radius=15)
+            if fp and (not snapped or fp != snapped[-1]):
+                snapped.append(fp)
+
+    if len(snapped) < 2:
+        return None
+
+    # スナップポイント間を密に補間
+    dense = interpolate_points(snapped, step=2.0)
+    return dense
+
+
 def clip_to_outline(points, font_bmp):
     """
     全ポイントをフォントアウトライン内にクリッピング。
@@ -1171,18 +1200,29 @@ def smooth_path(points, window=5):
 def fit_line_if_straight(points, threshold=4.0):
     """
     ポイント列がほぼ直線なら2点（始点・終点）に置換。
+    横棒/縦棒（角度<20度）の場合は閾値を2倍にして積極的に直線化。
     threshold: 直線からの最大許容偏差（px）。
     """
     if len(points) <= 2:
         return list(points)
     ax, ay = points[0]
     bx, by = points[-1]
+
+    # 方向検出: 横棒/縦棒は閾値2倍
+    dx, dy = abs(bx - ax), abs(by - ay)
+    total_len = (dx * dx + dy * dy) ** 0.5
+    effective_threshold = threshold
+    if total_len > 20 and max(dx, dy) > 0:
+        angle_ratio = min(dx, dy) / max(dx, dy)
+        if angle_ratio < 0.35:  # ~19度以内 → 横棒/縦棒
+            effective_threshold = threshold * 2
+
     max_dev = 0
     for px, py in points[1:-1]:
         d = pt_to_line_dist(px, py, ax, ay, bx, by)
         if d > max_dev:
             max_dev = d
-    if max_dev <= threshold:
+    if max_dev <= effective_threshold:
         return [points[0], points[-1]]
     return list(points)
 
@@ -1537,11 +1577,13 @@ def generate_strokes(kanji: str, debug=False) -> dict:
             # 候補2: ウェイポイント経由ピクセル経路（KVG中間点を強制経由）
             all_kvg_pts = [(round(px * KVG_SCALE), round(py * KVG_SCALE))
                            for px, py in kvg.get('all_points', [])]
-            if len(all_kvg_pts) >= 4:
-                # 4分割点をウェイポイントとして使用
+            if len(all_kvg_pts) >= 3:
+                # 適応的ウェイポイント数（複雑なストロークほど多く、最大8）
+                n_wp = min(8, max(3, len(all_kvg_pts) // 4))
                 wp_pixel = []
-                for frac in [0.25, 0.5, 0.75]:
-                    idx = int(len(all_kvg_pts) * frac)
+                for i in range(n_wp):
+                    frac = (i + 1) / (n_wp + 1)
+                    idx = min(int(len(all_kvg_pts) * frac), len(all_kvg_pts) - 1)
                     wp_pixel.append(all_kvg_pts[idx])
                 alt_wp = pixel_path_with_waypoints(
                     skel, (round(sx), round(sy)), (round(ex), round(ey)),
@@ -1558,7 +1600,7 @@ def generate_strokes(kanji: str, debug=False) -> dict:
             # ㇕/㇆タイプは角があるため常にKVGクリッピングを試行
             stroke_type = kvg.get('type', '')
             is_corner_type = any(c in stroke_type for c in ['㇕', '㇆'])
-            kvg_clip_threshold = 8 if is_corner_type else 12
+            kvg_clip_threshold = 8 if is_corner_type else 10
             if best_dev > kvg_clip_threshold and all_kvg_pts and len(all_kvg_pts) >= 2:
                 # KVGポイント間を密に補間してから角の形状を保持
                 kvg_dense = interpolate_points(all_kvg_pts, step=2.0)
@@ -1566,7 +1608,7 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                 # クリッピング後の強い平滑化（フォント輪郭の上端/下端ジグザグを解消）
                 kvg_clipped = smooth_path(kvg_clipped, window=15)
                 if len(kvg_clipped) >= 2:
-                    # 骨格距離ペナルティ（KVGクリッピングは骨格から外れがち）
+                    # 骨格距離ペナルティ軽減（1に削減。KVGルーティングの恩恵を活かす）
                     def _skel_dist(ppath):
                         step = max(1, len(ppath) // 10)
                         samps = ppath[::step]
@@ -1575,7 +1617,7 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                             if 0 <= px < W and 0 <= py < H and skel[py, px]:
                                 total += 0
                             else:
-                                total += 2  # 固定ペナルティ（3→2に軽減）
+                                total += 1  # 骨格ペナルティ軽減（2→1）
                         return total / len(samps)
                     dev_kvg_clip = _avg_dev(kvg_clipped)
                     skel_penalty = _skel_dist(kvg_clipped)
@@ -1585,11 +1627,24 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                         best_dev = effective_dev
                         print(f"    KVGクリッピング候補: 偏差{dev_kvg_clip:.1f}+骨格{skel_penalty:.1f}={effective_dev:.1f}px")
 
+            # 候補4: KVG骨格スナップ経路（KVGポイントを骨格中心にスナップ）
+            # Dijkstraルーティングに依存しないため、密集漢字で有効
+            if all_kvg_pts and len(all_kvg_pts) >= 2:
+                kvg_skel = kvg_skeleton_snap_path(all_kvg_pts, skel, bmp)
+                if kvg_skel and len(kvg_skel) >= 2:
+                    # 平滑化してから評価
+                    kvg_skel_smooth = smooth_path(kvg_skel, window=7)
+                    dev_kvg_skel = _avg_dev(kvg_skel_smooth)
+                    if dev_kvg_skel < best_dev:
+                        best_path = kvg_skel_smooth
+                        best_dev = dev_kvg_skel
+                        print(f"    KVG骨格スナップ候補: 偏差{dev_kvg_skel:.1f}px")
+
             # 改善があれば切替（閾値を緩和: 10%改善 or 高偏差時は任意改善）
             if best_dev < dev_current * 0.90:
                 print(f"    最適経路選択: 偏差{dev_current:.1f}→{best_dev:.1f}px")
                 path_pixels = best_path
-            elif dev_current > 8 and best_dev < dev_current:
+            elif dev_current > 6 and best_dev < dev_current:
                 print(f"    高偏差改善: 偏差{dev_current:.1f}→{best_dev:.1f}px")
                 path_pixels = best_path
 
