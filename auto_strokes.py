@@ -1827,6 +1827,87 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                     # 始点-終点の方向がH/Vに近い場合のみ強制直線化
                     if angle_ratio < 0.4:
                         simplified = [simplified[0], simplified[-1]]
+        # 6d. ジグザグ除去
+        # 両隣セグメントから大きく逸脱する短いセグメントを除去
+        # （交差点付近で間違った分岐に入って戻るパターンの救済）
+        import math
+        if len(simplified) > 3:
+            changed = True
+            while changed and len(simplified) > 2:
+                changed = False
+                new_pts = [simplified[0]]
+                skip_next = False
+                for i in range(1, len(simplified) - 1):
+                    if skip_next:
+                        skip_next = False
+                        continue
+                    ax, ay = simplified[i - 1]
+                    bx, by = simplified[i]
+                    cx, cy = simplified[i + 1]
+                    # B→Cセグメントの方向と長さ
+                    seg_bc_angle = math.atan2(cy - by, cx - bx)
+                    seg_bc_len = math.hypot(cx - bx, cy - by)
+                    # A→Bセグメントの方向
+                    seg_ab_angle = math.atan2(by - ay, bx - ax)
+                    # A→Bとの方向差
+                    diff_ab = abs(math.degrees(seg_bc_angle - seg_ab_angle))
+                    if diff_ab > 180:
+                        diff_ab = 360 - diff_ab
+                    # C→D方向（存在すれば）
+                    if i + 2 < len(simplified):
+                        dx2, dy2 = simplified[i + 2]
+                        seg_cd_angle = math.atan2(dy2 - cy, dx2 - cx)
+                        diff_cd = abs(math.degrees(seg_cd_angle - seg_bc_angle))
+                        if diff_cd > 180:
+                            diff_cd = 360 - diff_cd
+                    else:
+                        diff_cd = diff_ab  # 末尾近くは前方向差で代用
+                    # 両隣から45°以上逸脱 かつ 短いセグメント → ジグザグ
+                    if diff_ab > 45 and diff_cd > 45 and seg_bc_len < 25:
+                        changed = True
+                        skip_next = False  # Bを除去、Cは残す
+                        continue
+                    new_pts.append(simplified[i])
+                new_pts.append(simplified[-1])
+                simplified = new_pts
+        # 6e. 波打ち（wobble）除去
+        # dx符号が交互に反転する短いセグメント列 → 中間点を除去
+        # （骨格が左右に振れるケースの救済）
+        if len(simplified) > 4:
+            changed = True
+            while changed and len(simplified) > 3:
+                changed = False
+                new_pts = [simplified[0]]
+                i = 1
+                while i < len(simplified) - 1:
+                    ax, ay = simplified[i - 1]
+                    bx, by = simplified[i]
+                    cx, cy = simplified[i + 1]
+                    dx_ab = bx - ax
+                    dx_bc = cx - bx
+                    dy_ab = by - ay
+                    dy_bc = cy - by
+                    seg_ab_len = math.hypot(dx_ab, dy_ab)
+                    seg_bc_len = math.hypot(dx_bc, dy_bc)
+                    # dx符号反転 かつ 両セグメントが短い かつ dy同符号（同方向に進行中）
+                    x_reversal = (dx_ab * dx_bc < 0 and
+                                  abs(dx_ab) < abs(dy_ab) * 0.8 and
+                                  abs(dx_bc) < abs(dy_bc) * 0.8 and
+                                  dy_ab * dy_bc > 0)
+                    # dy符号反転も同様（横方向進行中の上下振れ）
+                    y_reversal = (dy_ab * dy_bc < 0 and
+                                  abs(dy_ab) < abs(dx_ab) * 0.8 and
+                                  abs(dy_bc) < abs(dx_bc) * 0.8 and
+                                  dx_ab * dx_bc > 0)
+                    if (x_reversal or y_reversal) and min(seg_ab_len, seg_bc_len) < 30:
+                        # Bを除去（波打ちの頂点）
+                        changed = True
+                        i += 1
+                        continue
+                    new_pts.append(simplified[i])
+                    i += 1
+                new_pts.append(simplified[-1])
+                simplified = new_pts
         # 7. 最終クリッピング（RDP後のポイントもアウトライン内に）
         simplified = clip_to_outline(simplified, bmp)
         print(f"    経路: {len(path_pixels)}px → {len(simplified)}点")
