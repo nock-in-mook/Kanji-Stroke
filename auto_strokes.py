@@ -1908,6 +1908,38 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                     i += 1
                 new_pts.append(simplified[-1])
                 simplified = new_pts
+        # 6f. 始点/終点フック除去
+        # 最初/最後のセグメントが短くて全体方向から大きく逸脱 → 除去
+        # （フォント装飾のセリフが骨格に残るケースの救済）
+        if len(simplified) >= 3:
+            dx_t = simplified[-1][0] - simplified[0][0]
+            dy_t = simplified[-1][1] - simplified[0][1]
+            total_len = math.hypot(dx_t, dy_t)
+            if total_len > 20:
+                angle_total = math.atan2(dy_t, dx_t)
+                # 始点フック
+                dx1 = simplified[1][0] - simplified[0][0]
+                dy1 = simplified[1][1] - simplified[0][1]
+                seg1_len = math.hypot(dx1, dy1)
+                if seg1_len > 3:
+                    angle1 = math.atan2(dy1, dx1)
+                    diff1 = abs(math.degrees(angle1 - angle_total))
+                    if diff1 > 180:
+                        diff1 = 360 - diff1
+                    if seg1_len < 25 and diff1 > 45:
+                        simplified = [simplified[0]] + simplified[2:]
+                # 終点フック
+                if len(simplified) >= 3:
+                    dxn = simplified[-1][0] - simplified[-2][0]
+                    dyn = simplified[-1][1] - simplified[-2][1]
+                    segn_len = math.hypot(dxn, dyn)
+                    if segn_len > 3:
+                        anglen = math.atan2(dyn, dxn)
+                        diffn = abs(math.degrees(anglen - angle_total))
+                        if diffn > 180:
+                            diffn = 360 - diffn
+                        if segn_len < 25 and diffn > 45:
+                            simplified = simplified[:-2] + [simplified[-1]]
         # 7. 最終クリッピング（RDP後のポイントもアウトライン内に）
         simplified = clip_to_outline(simplified, bmp)
         print(f"    経路: {len(path_pixels)}px → {len(simplified)}点")
