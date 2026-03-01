@@ -564,6 +564,52 @@ def parse_kvg_strokes(svg_text: str):
 # 5. グラフマッチング + 経路探索
 # ============================================================
 
+def build_skeleton_label_map(skel, kvg_strokes, kvg_scale):
+    """
+    骨格ピクセルにKVGストローク番号をラベル付け。
+    各骨格ピクセルは最も近いKVGストロークのパスに帰属する。
+    ストロークルーティング時に「他ストロークの骨格」を避けるために使用。
+    returns: label_map[y, x] = stroke_index (0-based) or -1 (ラベルなし)
+    """
+    h, w = skel.shape
+    label_map = np.full((h, w), -1, dtype=np.int16)
+    dist_map = np.full((h, w), 999.0, dtype=np.float32)
+    LABEL_RADIUS = 12  # ラベリング半径（ピクセル）
+
+    for si, kvg in enumerate(kvg_strokes):
+        all_pts = kvg.get('all_points', [])
+        if not all_pts:
+            continue
+        # KVG座標をスケーリング
+        scaled = [(round(px * kvg_scale), round(py * kvg_scale)) for px, py in all_pts]
+        # サンプリング（全点だと遅いので適度に間引き）
+        step = max(1, len(scaled) // 30)
+        sampled = scaled[::step]
+        if scaled[-1] not in sampled:
+            sampled.append(scaled[-1])
+
+        for kx, ky in sampled:
+            for dy in range(-LABEL_RADIUS, LABEL_RADIUS + 1):
+                ny = ky + dy
+                if ny < 0 or ny >= h:
+                    continue
+                for dx in range(-LABEL_RADIUS, LABEL_RADIUS + 1):
+                    nx = kx + dx
+                    if nx < 0 or nx >= w:
+                        continue
+                    if not skel[ny, nx]:
+                        continue
+                    d = (dx * dx + dy * dy) ** 0.5
+                    if d < dist_map[ny, nx]:
+                        dist_map[ny, nx] = d
+                        label_map[ny, nx] = si
+
+    labeled_count = np.sum(label_map >= 0)
+    skel_count = np.sum(skel)
+    print(f"  骨格ラベリング: {labeled_count}/{skel_count}px ({labeled_count*100//max(1,skel_count)}%)")
+    return label_map
+
+
 def find_nearest_skeleton_pixel(skel, target_x, target_y, search_radius=80):
     """骨格ビットマップ上で座標に最も近い骨格ピクセルを返す"""
     h, w = skel.shape
@@ -604,7 +650,8 @@ def _find_nearest_font_pixel(font_bmp, target_x, target_y, search_radius=15):
 
 
 def skeleton_pixel_path(skel, start_xy, end_xy, guide_points=None, penalty_weight=0.3,
-                         font_bmp=None, used_pixels=None, off_skeleton_cost=8.0):
+                         font_bmp=None, used_pixels=None, off_skeleton_cost=8.0,
+                         label_map=None, stroke_index=-1):
     """
     骨格ピクセルレベルのDijkstra経路探索。
     グラフ構造に依存せず、骨格ピクセルを直接通る。
@@ -688,6 +735,7 @@ def skeleton_pixel_path(skel, start_xy, end_xy, guide_points=None, penalty_weigh
     # Dijkstra on skeleton pixels（フォントビットマップで橋渡し可能）
     OFF_SKELETON_COST = off_skeleton_cost  # 骨格外フォント内ピクセルのコスト倍率
     USED_PIXEL_COST = 2.0    # 使用済みピクセルのコスト倍率
+    WRONG_LABEL_COST = 3.0   # 他ストロークのラベル付きピクセルのコスト倍率
     dist = {start_skel: 0.0}
     prev = {start_skel: None}
     pq = [(0.0, start_skel)]
@@ -722,6 +770,11 @@ def skeleton_pixel_path(skel, start_xy, end_xy, guide_points=None, penalty_weigh
             base_cost = 1.414 if (dx != 0 and dy != 0) else 1.0
             if not on_skeleton:
                 base_cost *= OFF_SKELETON_COST  # 骨格外だがフォント内 → 高コスト
+            # 他ストロークラベルペナルティ
+            if label_map is not None and stroke_index >= 0:
+                pixel_label = label_map[ny, nx]
+                if pixel_label >= 0 and pixel_label != stroke_index:
+                    base_cost *= WRONG_LABEL_COST
             # 使用済みピクセルペナルティ
             npos = (nx, ny)
             if used_pixels and npos in used_pixels:
@@ -739,7 +792,7 @@ def skeleton_pixel_path(skel, start_xy, end_xy, guide_points=None, penalty_weigh
 
 def pixel_path_with_waypoints(skel, start_xy, end_xy, waypoints, guide_points=None,
                                penalty_weight=3.0, font_bmp=None, used_pixels=None,
-                               off_skeleton_cost=3.0):
+                               off_skeleton_cost=3.0, label_map=None, stroke_index=-1):
     """
     ウェイポイント経由のピクセルレベル経路探索。
     各セグメントを個別にDijkstraでルーティングし、結合する。
@@ -751,7 +804,8 @@ def pixel_path_with_waypoints(skel, start_xy, end_xy, waypoints, guide_points=No
     if not waypoints:
         return skeleton_pixel_path(skel, start_xy, end_xy, guide_points=guide_points,
                                     penalty_weight=penalty_weight, font_bmp=font_bmp,
-                                    used_pixels=used_pixels, off_skeleton_cost=off_skeleton_cost)
+                                    used_pixels=used_pixels, off_skeleton_cost=off_skeleton_cost,
+                                    label_map=label_map, stroke_index=stroke_index)
 
     # ルートポイント: 始点 → WP1 → WP2 → ... → 終点
     route_pts = [start_xy] + [(round(wx), round(wy)) for wx, wy in waypoints] + [end_xy]
@@ -762,7 +816,8 @@ def pixel_path_with_waypoints(skel, start_xy, end_xy, waypoints, guide_points=No
             skel, route_pts[i], route_pts[i + 1],
             guide_points=guide_points, penalty_weight=penalty_weight,
             font_bmp=font_bmp, used_pixels=used_pixels,
-            off_skeleton_cost=off_skeleton_cost
+            off_skeleton_cost=off_skeleton_cost,
+            label_map=label_map, stroke_index=stroke_index
         )
         if seg is None or len(seg) < 1:
             return None
@@ -914,20 +969,25 @@ def shortest_path(adjacency, edges, start_id, end_id):
     return all_pixels
 
 
-def shortest_path_directed(adjacency, edges, start_id, end_id, guide_points=None, penalty_weight=5.0, used_edges=None):
+def shortest_path_directed(adjacency, edges, start_id, end_id, guide_points=None, penalty_weight=5.0,
+                           used_edges=None, label_map=None, stroke_index=-1):
     """
     KVGガイドポイント考慮のDijkstra最短経路探索。
     guide_points: [(x, y), ...] KVGパスに沿ったガイドポイント。
     used_edges: {edge_idx: count} 前のストロークが使用したエッジ → 追加ペナルティ。
-    エッジのコスト = 長さ + ガイドペナルティ + 使用済みペナルティ
+    label_map: 骨格ラベルマップ（ストローク所有権）。
+    stroke_index: 現在のストローク番号（label_mapと組み合わせて使用）。
+    エッジのコスト = 長さ + ガイドペナルティ + 使用済みペナルティ + ラベルペナルティ
     """
     if start_id == end_id:
         return []
 
     USED_EDGE_PENALTY = 50.0  # 使用済みエッジのペナルティ
+    WRONG_LABEL_EDGE_PENALTY = 30.0  # 他ストロークラベルのエッジペナルティ
 
     # エッジごとのペナルティを事前計算
     edge_penalties = {}
+    edge_label_penalties = {}
     if guide_points and len(guide_points) >= 2:
         for eidx, edge in enumerate(edges):
             pixels = edge['pixels']
@@ -948,6 +1008,27 @@ def shortest_path_directed(adjacency, edges, start_id, end_id, guide_points=None
                 total_min_dist += min_dist
             edge_penalties[eidx] = total_min_dist / len(samples)
 
+    # ラベルペナルティ事前計算
+    if label_map is not None and stroke_index >= 0:
+        for eidx, edge in enumerate(edges):
+            pixels = edge['pixels']
+            n = len(pixels)
+            if n == 0:
+                continue
+            # サンプリングで他ストロークラベル比率を計算
+            step = max(1, n // 5)
+            wrong_count = 0
+            total_sampled = 0
+            for si in range(0, n, step):
+                px, py = pixels[si]
+                lbl = label_map[py, px]
+                total_sampled += 1
+                if lbl >= 0 and lbl != stroke_index:
+                    wrong_count += 1
+            if total_sampled > 0 and wrong_count > 0:
+                wrong_ratio = wrong_count / total_sampled
+                edge_label_penalties[eidx] = wrong_ratio * WRONG_LABEL_EDGE_PENALTY
+
     # Dijkstra
     dist = {start_id: 0}
     prev = {}
@@ -966,6 +1047,9 @@ def shortest_path_directed(adjacency, edges, start_id, end_id, guide_points=None
             # 使用済みエッジペナルティ
             if used_edges and edge_idx in used_edges:
                 penalty += USED_EDGE_PENALTY * used_edges[edge_idx]
+            # ラベルペナルティ（他ストロークの骨格を通るコスト）
+            if edge_idx in edge_label_penalties:
+                penalty += edge_label_penalties[edge_idx]
             nd = d + base_cost + penalty
             if nd < dist.get(neighbor, float('inf')):
                 dist[neighbor] = nd
@@ -1005,12 +1089,15 @@ def shortest_path_directed(adjacency, edges, start_id, end_id, guide_points=None
     return all_pixels
 
 
-def find_path_with_waypoints(nodes, adjacency, edges, start_node, end_node, waypoints, guide_points=None, used_edges=None):
+def find_path_with_waypoints(nodes, adjacency, edges, start_node, end_node, waypoints,
+                             guide_points=None, used_edges=None, label_map=None, stroke_index=-1):
     """
     中間ウェイポイントを経由する経路を探索。
     waypointsは(x, y)リスト。最寄りのノードに変換して経由する。
     guide_pointsが指定されている場合、各セグメントでガイド考慮Dijkstraを使用。
     used_edges: 前のストロークが使用したエッジ辞書。
+    label_map: 骨格ラベルマップ。
+    stroke_index: 現在のストローク番号。
     """
     # ウェイポイントをノードに変換
     wp_nodes = []
@@ -1036,7 +1123,7 @@ def find_path_with_waypoints(nodes, adjacency, edges, start_node, end_node, wayp
             segment = shortest_path_directed(
                 adjacency, edges, route_nodes[i]['id'], route_nodes[i + 1]['id'],
                 guide_points=guide_points, penalty_weight=5.0,
-                used_edges=used_edges
+                used_edges=used_edges, label_map=label_map, stroke_index=stroke_index
             )
         else:
             segment = shortest_path(adjacency, edges, route_nodes[i]['id'], route_nodes[i + 1]['id'])
@@ -1417,6 +1504,9 @@ def generate_strokes(kanji: str, debug=False) -> dict:
     kvg_strokes = parse_kvg_strokes(svg_text)
     print(f"  KanjiVG: {len(kvg_strokes)}画")
 
+    # 4b. 骨格ラベリング（各ストロークの骨格ピクセル所有権）
+    label_map = build_skeleton_label_map(skel, kvg_strokes, KVG_SCALE)
+
     # 使用済みエッジ追跡（ストローク間の重複防止）
     used_edges = {}  # {edge_idx: 使用回数}
     used_pixels = set()  # ピクセルレベルパス用
@@ -1438,7 +1528,8 @@ def generate_strokes(kanji: str, debug=False) -> dict:
 
     # 5-8. 各画のマッチング + 経路探索
     result_strokes = []
-    for kvg in kvg_strokes:
+    for si, kvg in enumerate(kvg_strokes):
+        stroke_idx = si  # ラベルマップ用のストロークインデックス（0-based）
         print(f"\n  画{kvg['num']} ({kvg['id']}): type={kvg['type']}")
 
         # KanjiVG座標を300×300にスケーリング
@@ -1486,7 +1577,7 @@ def generate_strokes(kanji: str, debug=False) -> dict:
             pixel_path = skeleton_pixel_path(
                 skel, (round(sx), round(sy)), (round(ex), round(ey)),
                 guide_points=None, penalty_weight=0.3, font_bmp=bmp,
-                used_pixels=used_pixels
+                used_pixels=used_pixels, label_map=label_map, stroke_index=stroke_idx
             )
             if pixel_path and len(pixel_path) >= 2:
                 print(f"    font_bmpピクセル経路: {len(pixel_path)}px")
@@ -1567,7 +1658,8 @@ def generate_strokes(kanji: str, debug=False) -> dict:
         if mid_scaled:
             path_pixels = find_path_with_waypoints(
                 nodes, adjacency, edges, start_node, end_node, mid_scaled,
-                guide_points=guide_points, used_edges=used_edges
+                guide_points=guide_points, used_edges=used_edges,
+                label_map=label_map, stroke_index=stroke_idx
             )
             if path_pixels and len(path_pixels) >= 2:
                 print(f"    ウェイポイント経由: {len(path_pixels)}ピクセル ({len(mid_scaled)}WP)")
@@ -1578,7 +1670,8 @@ def generate_strokes(kanji: str, debug=False) -> dict:
         if path_pixels is None or len(path_pixels) < 2:
             path_pixels = shortest_path_directed(
                 adjacency, edges, start_node['id'], end_node['id'],
-                guide_points=guide_points, used_edges=used_edges
+                guide_points=guide_points, used_edges=used_edges,
+                label_map=label_map, stroke_index=stroke_idx
             )
 
         # 経路長バリデーション: 迂回しすぎならピクセルレベルで再試行
@@ -1589,7 +1682,7 @@ def generate_strokes(kanji: str, debug=False) -> dict:
             alt_path = skeleton_pixel_path(
                 skel, (round(sx), round(sy)), (round(ex), round(ey)),
                 guide_points=guide_points, penalty_weight=1.5, font_bmp=bmp,
-                used_pixels=used_pixels
+                used_pixels=used_pixels, label_map=label_map, stroke_index=stroke_idx
             )
             if alt_path and len(alt_path) >= 2:
                 alt_ratio = len(alt_path) / kvg_dist
@@ -1612,7 +1705,7 @@ def generate_strokes(kanji: str, debug=False) -> dict:
             alt_plain = skeleton_pixel_path(
                 skel, (round(sx), round(sy)), (round(ex), round(ey)),
                 guide_points=guide_points, penalty_weight=2.5, font_bmp=bmp,
-                used_pixels=used_pixels
+                used_pixels=used_pixels, label_map=label_map, stroke_index=stroke_idx
             )
             if alt_plain and len(alt_plain) >= 2:
                 dev_plain = _avg_dev(alt_plain)
@@ -1634,7 +1727,8 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                 alt_wp = pixel_path_with_waypoints(
                     skel, (round(sx), round(sy)), (round(ex), round(ey)),
                     wp_pixel, guide_points=guide_points, penalty_weight=8.0,
-                    font_bmp=bmp, used_pixels=used_pixels
+                    font_bmp=bmp, used_pixels=used_pixels,
+                    label_map=label_map, stroke_index=stroke_idx
                 )
                 if alt_wp and len(alt_wp) >= 2:
                     dev_wp = _avg_dev(alt_wp)
@@ -1708,14 +1802,16 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                     seg1 = skeleton_pixel_path(
                         skel, (round(sx), round(sy)), corner_skel,
                         guide_points=seg1_guide, penalty_weight=5.0,
-                        font_bmp=bmp, used_pixels=used_pixels
+                        font_bmp=bmp, used_pixels=used_pixels,
+                        label_map=label_map, stroke_index=stroke_idx
                     )
                     # セグメント2: 角点→終点
                     seg2_guide = [(round(p[0]), round(p[1])) for p in all_kvg_pts[corner_idx:]]
                     seg2 = skeleton_pixel_path(
                         skel, corner_skel, (round(ex), round(ey)),
                         guide_points=seg2_guide, penalty_weight=5.0,
-                        font_bmp=bmp, used_pixels=used_pixels
+                        font_bmp=bmp, used_pixels=used_pixels,
+                        label_map=label_map, stroke_index=stroke_idx
                     )
                     if seg1 and seg2 and len(seg1) >= 2 and len(seg2) >= 2:
                         # 接続点の重複除去して結合
@@ -1744,7 +1840,7 @@ def generate_strokes(kanji: str, debug=False) -> dict:
             pixel_path = skeleton_pixel_path(
                 skel, (round(sx), round(sy)), (round(ex), round(ey)),
                 guide_points=guide_points, font_bmp=bmp,
-                used_pixels=used_pixels
+                used_pixels=used_pixels, label_map=label_map, stroke_index=stroke_idx
             )
             if pixel_path and len(pixel_path) >= 2:
                 print(f"    ピクセルレベル経路: {len(pixel_path)}px")
