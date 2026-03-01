@@ -1812,6 +1812,21 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                         simplified = list(seg1_straight) + list(seg2_straight[1:])
                     else:
                         simplified = list(seg1_straight) + list(seg2_straight)
+        # 6c. 純横棒/純縦棒の強制直線化
+        # ㇐/㇑タイプで3点以上残る場合、始点-終点の直線に強制変換
+        # （密集文字で間違った分岐を通るケースの救済）
+        if len(simplified) > 2:
+            pure_type = kvg.get('type', '').rstrip('a')
+            if pure_type in ('㇐', '㇑'):
+                ax, ay = simplified[0]
+                bx, by = simplified[-1]
+                dx, dy = abs(bx - ax), abs(by - ay)
+                total = (dx * dx + dy * dy) ** 0.5
+                if total > 20:
+                    angle_ratio = min(dx, dy) / max(dx, dy) if max(dx, dy) > 0 else 0
+                    # 始点-終点の方向がH/Vに近い場合のみ強制直線化
+                    if angle_ratio < 0.4:
+                        simplified = [simplified[0], simplified[-1]]
         # 7. 最終クリッピング（RDP後のポイントもアウトライン内に）
         simplified = clip_to_outline(simplified, bmp)
         print(f"    経路: {len(path_pixels)}px → {len(simplified)}点")
