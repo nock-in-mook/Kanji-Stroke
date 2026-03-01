@@ -1386,7 +1386,7 @@ def remove_zigzags(points, angle_threshold=0.3):
             # 鋭い折り返し（cos < -threshold）→ 中間点を削除
             if cos_angle < -angle_threshold:
                 # さらに、折り返し先が近い場合のみ除去（遠い場合は意味のある曲がり）
-                if min(ab_len, bc_len) < 20:
+                if min(ab_len, bc_len) < 30:
                     i += 1
                     continue
         result.append(points[i])
@@ -2003,7 +2003,7 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                     else:
                         diff_cd = diff_ab  # 末尾近くは前方向差で代用
                     # 両隣から45°以上逸脱 かつ 短いセグメント → ジグザグ
-                    if diff_ab > 45 and diff_cd > 45 and seg_bc_len < 25:
+                    if diff_ab > 45 and diff_cd > 45 and seg_bc_len < 35:
                         changed = True
                         skip_next = False  # Bを除去、Cは残す
                         continue
