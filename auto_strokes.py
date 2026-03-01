@@ -1740,7 +1740,16 @@ def generate_strokes(kanji: str, debug=False) -> dict:
             # ㇕/㇆タイプは角があるため常にKVGクリッピングを試行
             stroke_type = kvg.get('type', '')
             is_corner_type = any(c in stroke_type for c in ['㇕', '㇆'])
-            kvg_clip_threshold = 8 if is_corner_type else 10
+            # 密集漢字ではKVGクリッピングのしきい値を下げて積極的に試行
+            n_nodes = len(nodes)
+            if is_corner_type:
+                kvg_clip_threshold = 8
+            elif n_nodes >= 40:
+                kvg_clip_threshold = 5  # 密集漢字: 偏差5以上でKVGクリッピング試行
+            elif n_nodes >= 25:
+                kvg_clip_threshold = 7
+            else:
+                kvg_clip_threshold = 10
             if best_dev > kvg_clip_threshold and all_kvg_pts and len(all_kvg_pts) >= 2:
                 # KVGポイント間を密に補間してから角の形状を保持
                 kvg_dense = interpolate_points(all_kvg_pts, step=2.0)
@@ -1776,11 +1785,17 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                     kvg_skel_smooth = smooth_path(kvg_skel, window=7)
                     dev_kvg_skel = _avg_dev(kvg_skel_smooth)
                     # KVGスナップはルーティング不要で密集漢字に強いため
-                    # 全ストロークに10%ボーナス、㇕/㇆には20%ボーナス
+                    # ノード数に応じてボーナスを動的調整（密集→大きいボーナス）
+                    n_nodes = len(nodes)
                     if is_corner_type:
-                        accept_threshold = best_dev * 1.2
+                        base_bonus = 1.2
+                    elif n_nodes >= 40:
+                        base_bonus = 1.4  # 密集漢字: 40%ボーナス
+                    elif n_nodes >= 25:
+                        base_bonus = 1.25  # 中密度: 25%ボーナス
                     else:
-                        accept_threshold = best_dev * 1.1
+                        base_bonus = 1.1
+                    accept_threshold = best_dev * base_bonus
                     if dev_kvg_skel < accept_threshold:
                         best_path = kvg_skel_smooth
                         best_dev = dev_kvg_skel
@@ -1826,11 +1841,14 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                             best_dev = dev_seg
                             print(f"    角分割ルーティング候補: 角度{corner_angle:.0f}° 偏差{dev_seg:.1f}px")
 
-            # 改善があれば切替（閾値を緩和: 10%改善 or 高偏差時は任意改善）
+            # 改善があれば切替
+            # 密集漢字（40+ノード）は偏差4以上で任意改善を許可
+            n_nodes = len(nodes)
+            high_dev_threshold = 4 if n_nodes >= 40 else (5 if n_nodes >= 25 else 6)
             if best_dev < dev_current * 0.90:
                 print(f"    最適経路選択: 偏差{dev_current:.1f}→{best_dev:.1f}px")
                 path_pixels = best_path
-            elif dev_current > 6 and best_dev < dev_current:
+            elif dev_current > high_dev_threshold and best_dev < dev_current:
                 print(f"    高偏差改善: 偏差{dev_current:.1f}→{best_dev:.1f}px")
                 path_pixels = best_path
 
@@ -2107,6 +2125,15 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                 simplified = [(ax, avg_y), (bx, avg_y)]
                 if ay != avg_y or by != avg_y:
                     print(f"    6h: ㇐水平揃え y={ay},{by}→{avg_y}")
+        # 6i. 折れ曲がりストローク（㇄/㇃等）の追加平滑化
+        # KVGクリッピング経路は骨格の分岐点付近でジグザグが残りやすい
+        # 5点以上の場合、始点-終点を固定して中間を追加RDPで簡略化
+        turn_types = ['㇄', '㇃', '㇈']
+        if any(c in stroke_type for c in turn_types) and len(simplified) >= 5:
+            before = len(simplified)
+            simplified = rdp_simplify(simplified, epsilon=12.0)
+            if len(simplified) < before:
+                print(f"    6i: ㇄平滑化 {before}→{len(simplified)}点")
         # 7. 最終クリッピング（RDP後のポイントもアウトライン内に）
         simplified = clip_to_outline(simplified, bmp)
         print(f"    経路: {len(path_pixels)}px → {len(simplified)}点")
