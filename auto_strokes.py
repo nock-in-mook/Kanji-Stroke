@@ -872,7 +872,7 @@ def shortest_path(adjacency, edges, start_id, end_id):
     return all_pixels
 
 
-def shortest_path_directed(adjacency, edges, start_id, end_id, guide_points=None, penalty_weight=3.0, used_edges=None):
+def shortest_path_directed(adjacency, edges, start_id, end_id, guide_points=None, penalty_weight=5.0, used_edges=None):
     """
     KVGガイドポイント考慮のDijkstra最短経路探索。
     guide_points: [(x, y), ...] KVGパスに沿ったガイドポイント。
@@ -993,7 +993,7 @@ def find_path_with_waypoints(nodes, adjacency, edges, start_node, end_node, wayp
         if guide_points:
             segment = shortest_path_directed(
                 adjacency, edges, route_nodes[i]['id'], route_nodes[i + 1]['id'],
-                guide_points=guide_points, penalty_weight=3.0,
+                guide_points=guide_points, penalty_weight=5.0,
                 used_edges=used_edges
             )
         else:
@@ -1408,6 +1408,25 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                     print(f"    → ピクセル経路に切替 ({len(alt_path)}px, 比率{alt_ratio:.1f}x)")
                     path_pixels = alt_path
 
+        # 短いストロークはピクセルパスの方が正確（密集部で効果的）
+        if path_pixels and kvg_dist > 5 and kvg_dist < 40 and guide_points and len(guide_points) >= 2:
+            alt_path = skeleton_pixel_path(
+                skel, (round(sx), round(sy)), (round(ex), round(ey)),
+                guide_points=guide_points, penalty_weight=1.5, font_bmp=bmp,
+                used_pixels=used_pixels
+            )
+            if alt_path and len(alt_path) >= 2:
+                # ピクセルパスのKVG偏差を比較して良い方を選択
+                def _avg_deviation(ppath):
+                    step = max(1, len(ppath) // 8)
+                    samps = ppath[::step]
+                    return sum(min(((px-gx)**2+(py-gy)**2)**0.5 for gx,gy in guide_points) for px,py in samps) / len(samps)
+                dev_graph = _avg_deviation(path_pixels)
+                dev_pixel = _avg_deviation(alt_path)
+                if dev_pixel < dev_graph * 0.9:  # 10%以上偏差改善
+                    print(f"    短ストローク最適化: 偏差{dev_graph:.1f}→{dev_pixel:.1f}px")
+                    path_pixels = alt_path
+
         # KVG偏差チェック: 経路がKVGガイドから大きく外れていたらピクセル経路に切替
         if path_pixels and len(path_pixels) >= 5 and guide_points and len(guide_points) >= 2:
             # パス上の代表点（10点サンプリング）のKVGからの平均距離
@@ -1418,8 +1437,8 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                 min_d = min(((px - gx) ** 2 + (py - gy) ** 2) ** 0.5 for gx, gy in guide_points)
                 total_dev += min_d
             avg_dev = total_dev / len(samples)
-            # 平均偏差が20px以上ならKVGから大きく外れている
-            if avg_dev > 20:
+            # 平均偏差が15px以上ならKVGから大きく外れている
+            if avg_dev > 15:
                 print(f"    ⚠ KVG偏差大 (平均{avg_dev:.1f}px) → ピクセル経路を試行")
                 alt_path = skeleton_pixel_path(
                     skel, (round(sx), round(sy)), (round(ex), round(ey)),
