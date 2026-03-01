@@ -1091,6 +1091,32 @@ def pt_to_line_dist(px, py, ax, ay, bx, by):
     return ((px - proj_x) ** 2 + (py - proj_y) ** 2) ** 0.5
 
 
+def interpolate_points(points, step=2.0):
+    """
+    ポイント列を密に補間。stepピクセル間隔で線形補間ポイントを挿入。
+    ㇕/㇆の角を保持するために、KVGポイント間を細かく補間する。
+    """
+    if len(points) < 2:
+        return list(points)
+    result = [points[0]]
+    for i in range(len(points) - 1):
+        x1, y1 = points[i]
+        x2, y2 = points[i + 1]
+        dx, dy = x2 - x1, y2 - y1
+        dist = (dx * dx + dy * dy) ** 0.5
+        if dist <= step:
+            result.append((x2, y2))
+            continue
+        n_steps = int(dist / step)
+        for j in range(1, n_steps + 1):
+            t = j / (n_steps + 1)
+            ix = round(x1 + dx * t)
+            iy = round(y1 + dy * t)
+            result.append((ix, iy))
+        result.append((x2, y2))
+    return result
+
+
 def clip_to_outline(points, font_bmp):
     """
     全ポイントをフォントアウトライン内にクリッピング。
@@ -1161,10 +1187,10 @@ def fit_line_if_straight(points, threshold=4.0):
     return list(points)
 
 
-def remove_zigzags(points, angle_threshold=0.5):
+def remove_zigzags(points, angle_threshold=0.3):
     """
     連続3点がほぼ折り返し（鋭角）する場合、中間点を除去。
-    angle_threshold: cosが-1に近いほど折り返し。0.5 ≈ 120度。
+    angle_threshold: cosが-1に近いほど折り返し。0.3 ≈ 107度。
     cos < -angle_threshold で除去。
     """
     if len(points) <= 2:
@@ -1187,11 +1213,46 @@ def remove_zigzags(points, angle_threshold=0.5):
             # 鋭い折り返し（cos < -threshold）→ 中間点を削除
             if cos_angle < -angle_threshold:
                 # さらに、折り返し先が近い場合のみ除去（遠い場合は意味のある曲がり）
-                if min(ab_len, bc_len) < 15:
+                if min(ab_len, bc_len) < 20:
                     i += 1
                     continue
         result.append(points[i])
         i += 1
+    result.append(points[-1])
+    return result
+
+
+def remove_lateral_bumps(points, threshold=8.0):
+    """
+    ストロークの主方向に対して横方向に大きく外れる中間点を除去。
+    水平/垂直ストロークの小さなガタつきを解消する。
+    大きな偏差(15px以上)は意図的な角として保護。
+    """
+    if len(points) <= 3:
+        return list(points)
+
+    result = [points[0]]
+    for i in range(1, len(points) - 1):
+        # 前後の点を結ぶ線からの垂直距離
+        d = pt_to_line_dist(
+            points[i][0], points[i][1],
+            result[-1][0], result[-1][1],
+            points[i + 1][0], points[i + 1][1]
+        )
+        # 前後の点間の距離
+        seg_len = ((points[i+1][0] - result[-1][0]) ** 2 +
+                   (points[i+1][1] - result[-1][1]) ** 2) ** 0.5
+        if seg_len < 3:
+            result.append(points[i])
+            continue
+        # 大きな偏差は角として保護（㇕/㇆等）
+        if d >= 15:
+            result.append(points[i])
+            continue
+        # 固定閾値以下は除去（ガタつき）
+        if d < threshold:
+            continue
+        result.append(points[i])
     result.append(points[-1])
     return result
 
@@ -1493,37 +1554,42 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                         best_path = alt_wp
                         best_dev = dev_wp
 
-            # 候補3: KVGパス直接クリッピング（偏差が大きすぎる場合の救済）
-            if best_dev > 15 and all_kvg_pts and len(all_kvg_pts) >= 2:
-                kvg_clipped = clip_to_outline(all_kvg_pts, bmp)
+            # 候補3: KVGパス直接クリッピング（密補間付き）
+            # ㇕/㇆タイプは角があるため常にKVGクリッピングを試行
+            stroke_type = kvg.get('type', '')
+            is_corner_type = any(c in stroke_type for c in ['㇕', '㇆'])
+            kvg_clip_threshold = 8 if is_corner_type else 12
+            if best_dev > kvg_clip_threshold and all_kvg_pts and len(all_kvg_pts) >= 2:
+                # KVGポイント間を密に補間してから角の形状を保持
+                kvg_dense = interpolate_points(all_kvg_pts, step=2.0)
+                kvg_clipped = clip_to_outline(kvg_dense, bmp)
+                # クリッピング後の強い平滑化（フォント輪郭の上端/下端ジグザグを解消）
+                kvg_clipped = smooth_path(kvg_clipped, window=15)
                 if len(kvg_clipped) >= 2:
-                    # KVGクリッピングパスは骨格から外れることがあるので
-                    # 骨格への平均距離でペナルティ付き評価
+                    # 骨格距離ペナルティ（KVGクリッピングは骨格から外れがち）
                     def _skel_dist(ppath):
                         step = max(1, len(ppath) // 10)
                         samps = ppath[::step]
                         total = 0
                         for px, py in samps:
                             if 0 <= px < W and 0 <= py < H and skel[py, px]:
-                                total += 0  # 骨格上は0
+                                total += 0
                             else:
-                                # 最寄り骨格ピクセルまでの距離（簡易）
-                                total += 3  # 固定ペナルティ
+                                total += 2  # 固定ペナルティ（3→2に軽減）
                         return total / len(samps)
                     dev_kvg_clip = _avg_dev(kvg_clipped)
                     skel_penalty = _skel_dist(kvg_clipped)
-                    # KVGクリッピングは偏差ほぼ0だが骨格距離ペナルティを加算
                     effective_dev = dev_kvg_clip + skel_penalty
                     if effective_dev < best_dev:
                         best_path = kvg_clipped
                         best_dev = effective_dev
                         print(f"    KVGクリッピング候補: 偏差{dev_kvg_clip:.1f}+骨格{skel_penalty:.1f}={effective_dev:.1f}px")
 
-            # 改善があれば切替
-            if best_dev < dev_current * 0.85:
+            # 改善があれば切替（閾値を緩和: 10%改善 or 高偏差時は任意改善）
+            if best_dev < dev_current * 0.90:
                 print(f"    最適経路選択: 偏差{dev_current:.1f}→{best_dev:.1f}px")
                 path_pixels = best_path
-            elif dev_current > 12 and best_dev < dev_current:
+            elif dev_current > 8 and best_dev < dev_current:
                 print(f"    高偏差改善: 偏差{dev_current:.1f}→{best_dev:.1f}px")
                 path_pixels = best_path
 
@@ -1568,12 +1634,13 @@ def generate_strokes(kanji: str, debug=False) -> dict:
         path_pixels = clip_to_outline(path_pixels, bmp)
         # 3. RDP間引き
         simplified = rdp_simplify(path_pixels, epsilon=3.0)
-        # 4. ジグザグ除去
-        before_zz = len(simplified)
+        # 4. ジグザグ除去（鋭い折り返し）
         simplified = remove_zigzags(simplified)
-        # 5. 直線フィット（ほぼ直線なら2点に）
-        simplified = fit_line_if_straight(simplified, threshold=4.0)
-        # 6. 最終クリッピング（RDP後のポイントもアウトライン内に）
+        # 5. 横方向バンプ除去（ガタつき解消）
+        simplified = remove_lateral_bumps(simplified, threshold=6.0)
+        # 6. 直線フィット（ほぼ直線なら2点に、閾値を緩和して横棒のガタつき解消）
+        simplified = fit_line_if_straight(simplified, threshold=8.0)
+        # 7. 最終クリッピング（RDP後のポイントもアウトライン内に）
         simplified = clip_to_outline(simplified, bmp)
         print(f"    経路: {len(path_pixels)}px → {len(simplified)}点")
 
