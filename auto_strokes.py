@@ -1940,6 +1940,67 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                             diffn = 360 - diffn
                         if segn_len < 25 and diffn > 45:
                             simplified = simplified[:-2] + [simplified[-1]]
+        # 6g. ㇕/㇆ 直角強制
+        # 台形化を防止: 角点を調整して完全な直角を作る
+        # ㇕/㇆ は漢字では常に直角（水平→垂直 or 垂直→水平）
+        if any(c in stroke_type for c in ['㇕', '㇆']) and len(simplified) >= 3:
+            # 角点を見つける（内部点で最大の方向変化）
+            best_ci = None
+            best_angle_change = 0
+            for ci in range(1, len(simplified) - 1):
+                prev = simplified[ci - 1]
+                curr = simplified[ci]
+                nxt = simplified[ci + 1]
+                angle_in = math.atan2(curr[1] - prev[1], curr[0] - prev[0])
+                angle_out = math.atan2(nxt[1] - curr[1], nxt[0] - curr[0])
+                change = abs(math.degrees(angle_out - angle_in))
+                if change > 180:
+                    change = 360 - change
+                if change > best_angle_change:
+                    best_angle_change = change
+                    best_ci = ci
+            if best_ci is not None and best_angle_change > 30:
+                start = simplified[0]
+                corner = simplified[best_ci]
+                end = simplified[-1]
+                # セグメント方向判定
+                dx1 = corner[0] - start[0]
+                dy1 = corner[1] - start[1]
+                dx2 = end[0] - corner[0]
+                dy2 = end[1] - corner[1]
+                seg1_is_h = abs(dx1) > abs(dy1)
+                seg2_is_h = abs(dx2) > abs(dy2)
+                # H→V パターン（㇕の典型: 横→右下へ曲がる）
+                if seg1_is_h and not seg2_is_h:
+                    new_corner = (corner[0], start[1])
+                    new_end = (corner[0], end[1])
+                    simplified = [start, new_corner, new_end]
+                    print(f"    6g: H→V直角強制 corner({corner[0]},{corner[1]})→({new_corner[0]},{new_corner[1]})")
+                # V→H パターン（㇆変形: 縦→横へ曲がる）
+                elif not seg1_is_h and seg2_is_h:
+                    new_corner = (start[0], corner[1])
+                    new_end = (end[0], corner[1])
+                    simplified = [start, new_corner, new_end]
+                    print(f"    6g: V→H直角強制 corner({corner[0]},{corner[1]})→({new_corner[0]},{new_corner[1]})")
+        # 6h. ㇑/㇐ 軸揃え（2点ストロークの微小ズレ修正）
+        # ㇑は縦棒なのでx座標を揃えて完全垂直にする
+        # ㇐は横棒なのでy座標を揃えて完全水平にする
+        if len(simplified) == 2:
+            pure_type = stroke_type.rstrip('ab')
+            ax, ay = simplified[0]
+            bx, by = simplified[1]
+            dx_abs = abs(bx - ax)
+            dy_abs = abs(by - ay)
+            if pure_type == '㇑' and dy_abs > 20 and dx_abs < dy_abs * 0.25:
+                avg_x = (ax + bx) // 2
+                simplified = [(avg_x, ay), (avg_x, by)]
+                if ax != avg_x or bx != avg_x:
+                    print(f"    6h: ㇑垂直揃え x={ax},{bx}→{avg_x}")
+            elif pure_type == '㇐' and dx_abs > 20 and dy_abs < dx_abs * 0.15:
+                avg_y = (ay + by) // 2
+                simplified = [(ax, avg_y), (bx, avg_y)]
+                if ay != avg_y or by != avg_y:
+                    print(f"    6h: ㇐水平揃え y={ay},{by}→{avg_y}")
         # 7. 最終クリッピング（RDP後のポイントもアウトライン内に）
         simplified = clip_to_outline(simplified, bmp)
         print(f"    経路: {len(path_pixels)}px → {len(simplified)}点")
