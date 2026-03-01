@@ -1764,6 +1764,17 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                 # KVGポイント間を密に補間してから角の形状を保持
                 kvg_dense = interpolate_points(all_kvg_pts, step=2.0)
                 kvg_clipped = clip_to_outline(kvg_dense, bmp)
+                # クリッピング後の骨格引き寄せ（輪郭追跡を中心線に補正）
+                if len(kvg_clipped) >= 2:
+                    attracted = []
+                    for px, py in kvg_clipped:
+                        sp = find_nearest_skeleton_pixel(skel, round(px), round(py), search_radius=12)
+                        if sp:
+                            # 骨格ピクセルに50%引き寄せ（完全スナップだとKVG形状が崩れる）
+                            attracted.append((round((px + sp[0]) / 2), round((py + sp[1]) / 2)))
+                        else:
+                            attracted.append((round(px), round(py)))
+                    kvg_clipped = attracted
                 # クリッピング後の強い平滑化（フォント輪郭の上端/下端ジグザグを解消）
                 kvg_clipped = smooth_path(kvg_clipped, window=15)
                 if len(kvg_clipped) >= 2:
