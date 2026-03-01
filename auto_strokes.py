@@ -1644,14 +1644,22 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                 print(f"    終点延長: [{end_node['id']}]branch → [{ext_node['id']}]end ({ext_node['x']},{ext_node['y']})")
                 end_node = ext_node
 
-        # ガイドポイント構築（Bezier密サンプルの全点をスケーリング）
+        # KVG-骨格オフセット補正（始点/終点のマッチ結果から推定）
+        kvg_offset_dx = ((start_node['x'] - sx) + (end_node['x'] - ex)) / 2
+        kvg_offset_dy = ((start_node['y'] - sy) + (end_node['y'] - ey)) / 2
+        # X方向は小さく不安定なので無視、Y方向のみ補正
+        kvg_offset_y = kvg_offset_dy if abs(kvg_offset_dy) > 3 else 0
+
+        # ガイドポイント構築（Bezier密サンプルの全点をスケーリング + オフセット補正）
         all_scaled = [(px * KVG_SCALE, py * KVG_SCALE) for px, py in kvg.get('all_points', [])]
         if all_scaled:
-            guide_points = [(round(ax), round(ay)) for ax, ay in all_scaled]
+            guide_points = [(round(ax), round(ay + kvg_offset_y)) for ax, ay in all_scaled]
         else:
             guide_points = [(round(sx), round(sy))]
             guide_points += [(round(mx), round(my)) for mx, my in mid_scaled]
             guide_points += [(round(ex), round(ey))]
+        if abs(kvg_offset_y) > 3:
+            print(f"    KVG-骨格Y補正: {kvg_offset_y:+.0f}px")
 
         # ウェイポイント + ガイド考慮Dijkstraで経路探索
         path_pixels = None
@@ -1714,7 +1722,8 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                     best_dev = dev_plain
 
             # 候補2: ウェイポイント経由ピクセル経路（KVG中間点を強制経由）
-            all_kvg_pts = [(round(px * KVG_SCALE), round(py * KVG_SCALE))
+            # all_kvg_ptsにもY軸オフセット補正を適用
+            all_kvg_pts = [(round(px * KVG_SCALE), round(py * KVG_SCALE + kvg_offset_y))
                            for px, py in kvg.get('all_points', [])]
             if len(all_kvg_pts) >= 3:
                 # 適応的ウェイポイント数（複雑なストロークほど多く、最大8）
@@ -1739,7 +1748,7 @@ def generate_strokes(kanji: str, debug=False) -> dict:
             # 候補3: KVGパス直接クリッピング（密補間付き）
             # ㇕/㇆タイプは角があるため常にKVGクリッピングを試行
             stroke_type = kvg.get('type', '')
-            is_corner_type = any(c in stroke_type for c in ['㇕', '㇆'])
+            is_corner_type = any(c in stroke_type for c in ['㇕', '㇆', '㇖'])
             # 密集漢字ではKVGクリッピングのしきい値を下げて積極的に試行
             n_nodes = len(nodes)
             if is_corner_type:
@@ -1770,8 +1779,24 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                         return total / len(samps)
                     dev_kvg_clip = _avg_dev(kvg_clipped)
                     skel_penalty = _skel_dist(kvg_clipped)
-                    effective_dev = dev_kvg_clip + skel_penalty
-                    if effective_dev < best_dev:
+                    # 長さ比ペナルティ: 迂回路検出（始点-終点直線距離 vs 実パス長）
+                    p0 = kvg_clipped[0]
+                    p1 = kvg_clipped[-1]
+                    straight_dist = ((p1[0]-p0[0])**2 + (p1[1]-p0[1])**2)**0.5
+                    path_len = sum(((kvg_clipped[i+1][0]-kvg_clipped[i][0])**2 +
+                                    (kvg_clipped[i+1][1]-kvg_clipped[i][1])**2)**0.5
+                                   for i in range(len(kvg_clipped)-1))
+                    length_ratio = path_len / max(straight_dist, 1.0)
+                    # 迂回比2.5以上は三角パス等の異常 → 候補を完全に却下
+                    if length_ratio > 2.5:
+                        print(f"    KVGクリッピング却下: 迂回比{length_ratio:.2f}x (>2.5)")
+                        kvg_clipped = None
+                    else:
+                        length_penalty = max(0, (length_ratio - 1.8)) * 8.0
+                        effective_dev = dev_kvg_clip + skel_penalty + length_penalty
+                        if length_penalty > 0:
+                            print(f"    KVGクリッピング迂回比: {length_ratio:.2f}x → ペナルティ{length_penalty:.1f}")
+                    if kvg_clipped is not None and effective_dev < best_dev:
                         best_path = kvg_clipped
                         best_dev = effective_dev
                         print(f"    KVGクリッピング候補: 偏差{dev_kvg_clip:.1f}+骨格{skel_penalty:.1f}={effective_dev:.1f}px")
@@ -1807,9 +1832,10 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                 if corner_idx is not None:
                     corner_pt = all_kvg_pts[corner_idx]
                     # 角点を骨格にスナップ
-                    corner_skel = find_nearest_skeleton_pixel(skel, corner_pt[0], corner_pt[1], search_radius=15)
+                    # KVG-骨格Yオフセット(最大50px)を考慮した広い検索半径
+                    corner_skel = find_nearest_skeleton_pixel(skel, corner_pt[0], corner_pt[1], search_radius=55)
                     if corner_skel is None:
-                        corner_skel = _find_nearest_font_pixel(bmp, corner_pt[0], corner_pt[1], search_radius=15)
+                        corner_skel = _find_nearest_font_pixel(bmp, corner_pt[0], corner_pt[1], search_radius=55)
                     if corner_skel is None:
                         corner_skel = corner_pt
                     # セグメント1: 始点→角点
