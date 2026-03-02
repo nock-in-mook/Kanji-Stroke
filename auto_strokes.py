@@ -1528,6 +1528,7 @@ def generate_strokes(kanji: str, debug=False) -> dict:
 
     # 5-8. 各画のマッチング + 経路探索
     result_strokes = []
+    used_end_nodes = set()  # 使用済み終点ノードID（後続ストロークで回避）
     for si, kvg in enumerate(kvg_strokes):
         stroke_idx = si  # ラベルマップ用のストロークインデックス（0-based）
         print(f"\n  画{kvg['num']} ({kvg['id']}): type={kvg['type']}")
@@ -1556,6 +1557,24 @@ def generate_strokes(kanji: str, debug=False) -> dict:
             start_node = find_nearest_node(nodes, sx, sy, max_dist=80)
         if end_node is None:
             end_node = find_nearest_node(nodes, ex, ey, max_dist=80)
+
+        # 使用済み終点ノード回避: 別ストロークの終点と同じendノードを使おうとした場合、
+        # 次に近いノードに切替（endノードのみ対象、branchノードは共有が正常）
+        if end_node and end_node['id'] in used_end_nodes and end_node['type'] == 'end':
+            # 次に近いノードを探索（使用済みを除外）
+            alt_end = None
+            alt_dist = 999
+            for n in nodes:
+                if n['id'] in used_end_nodes and n['type'] == 'end':
+                    continue
+                tx, ty = (end_skel[0], end_skel[1]) if end_skel else (ex, ey)
+                d = ((n['x']-tx)**2 + (n['y']-ty)**2)**0.5
+                if d < alt_dist and d < 80:
+                    alt_dist = d
+                    alt_end = n
+            if alt_end:
+                print(f"    終点回避: [{end_node['id']}]使用済み → [{alt_end['id']}]({alt_end['x']},{alt_end['y']})")
+                end_node = alt_end
 
         if start_node is None or end_node is None:
             print(f"    ⚠ ノードにマッチできず → KVG座標フォールバック")
@@ -1599,6 +1618,8 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                     'path': path_d,
                     'taper': should_taper(kvg['type'])
                 })
+                if end_node and end_node['type'] == 'end':
+                    used_end_nodes.add(end_node['id'])
                 continue
             else:
                 # font_bmpでも失敗 → KVG座標フォールバック
@@ -1610,6 +1631,8 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                     'path': path_d,
                     'taper': should_taper(kvg['type'])
                 })
+                if end_node and end_node['type'] == 'end':
+                    used_end_nodes.add(end_node['id'])
                 continue
 
         # branch node → end node 延長
@@ -1914,6 +1937,8 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                 'path': path_d,
                 'taper': should_taper(kvg['type'])
             })
+            if end_node and end_node['type'] == 'end':
+                used_end_nodes.add(end_node['id'])
             continue
 
         # 使用済みエッジを記録（後続ストロークの重複回避用）
@@ -2190,6 +2215,10 @@ def generate_strokes(kanji: str, debug=False) -> dict:
             'path': path_d,
             'taper': taper
         })
+
+        # 使用済み終点ノードを記録（後続ストロークで同じendノードを回避）
+        if end_node and end_node['type'] == 'end':
+            used_end_nodes.add(end_node['id'])
 
     return {
         'kanji': kanji,
