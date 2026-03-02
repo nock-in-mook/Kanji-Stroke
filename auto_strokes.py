@@ -2153,7 +2153,7 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                 # 角点が始点/終点と十分離れている場合のみ挿入
                 d_start = ((cp[0]-s_x)**2 + (cp[1]-s_y)**2)**0.5
                 d_end = ((cp[0]-e_x)**2 + (cp[1]-e_y)**2)**0.5
-                if d_start > 10 and d_end > 10:
+                if d_start > 5 and d_end > 5:
                     simplified = [(s_x, s_y), cp, (e_x, e_y)]
                     direction = "H→V" if first_is_h else "V→H"
                     print(f"    6k: 角点復元 ({cp[0]},{cp[1]}) {direction}")
