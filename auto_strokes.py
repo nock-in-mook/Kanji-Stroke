@@ -1782,7 +1782,7 @@ def generate_strokes(kanji: str, debug=False) -> dict:
             # 候補3: KVGパス直接クリッピング（密補間付き）
             # ㇕/㇆タイプは角があるため常にKVGクリッピングを試行
             stroke_type = kvg.get('type', '')
-            is_corner_type = any(c in stroke_type for c in ['㇕', '㇆', '㇖'])
+            is_corner_type = any(c in stroke_type for c in ['㇕', '㇆', '㇖', '㇄'])
             # 密集漢字ではKVGクリッピングのしきい値を下げて積極的に試行
             n_nodes = len(nodes)
             if is_corner_type:
@@ -1871,9 +1871,11 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                         best_dev = dev_kvg_skel
                         print(f"    KVG骨格スナップ候補: 偏差{dev_kvg_skel:.1f}px")
 
-            # 候補5: ㇕/㇆角分割ルーティング（角点で2セグメントに分割）
+            # 候補5: ㇕/㇆/㇄角分割ルーティング（角点で2セグメントに分割）
             if is_corner_type and all_kvg_pts and len(all_kvg_pts) >= 6:
                 corner_idx, corner_angle = find_corner_point(all_kvg_pts)
+                if corner_idx is None:
+                    print(f"    角検出: なし（{len(all_kvg_pts)}pts, 最大角変化<50°）")
                 if corner_idx is not None:
                     corner_pt = all_kvg_pts[corner_idx]
                     # 角点を骨格にスナップ
@@ -1972,9 +1974,9 @@ def generate_strokes(kanji: str, debug=False) -> dict:
         simplified = remove_lateral_bumps(simplified, threshold=6.0)
         # 6. 直線フィット（ほぼ直線なら2点に、閾値を緩和して横棒のガタつき解消）
         simplified = fit_line_if_straight(simplified, threshold=8.0)
-        # 6b. ㇕/㇆セグメント別直線化（KVG角点で分割して各辺を直線化）
+        # 6b. ㇕/㇆/㇄セグメント別直線化（KVG角点で分割して各辺を直線化）
         stroke_type = kvg.get('type', '')
-        if any(c in stroke_type for c in ['㇕', '㇆']) and len(simplified) >= 3:
+        if any(c in stroke_type for c in ['㇕', '㇆', '㇄']) and len(simplified) >= 3:
             # KVGのall_pointsから角点を検出
             _all_kvg = [(round(px * KVG_SCALE), round(py * KVG_SCALE))
                         for px, py in kvg.get('all_points', [])]
@@ -2127,10 +2129,38 @@ def generate_strokes(kanji: str, debug=False) -> dict:
                             diffn = 360 - diffn
                         if segn_len < 25 and diffn > 45:
                             simplified = simplified[:-2] + [simplified[-1]]
-        # 6g. ㇕/㇆ 直角強制
+        # 6k. コーナータイプ2点ストロークの角点復元
+        # RDP簡略化で角が消えた場合、ノード位置から幾何学的にL字角点を挿入
+        _is_corner_6k = any(c in stroke_type for c in ['㇕', '㇆', '㇄', '㇖'])
+        if _is_corner_6k and len(simplified) == 2:
+            # ノードの元位置を使う（クリッピングで移動した simplified ではなく）
+            s_x, s_y = start_node['x'], start_node['y']
+            e_x, e_y = end_node['x'], end_node['y']
+            # KVG all_pointsから方向を判定（H→VかV→Hか）
+            _all_kvg_6k = [(round(px * KVG_SCALE), round(py * KVG_SCALE + kvg_offset_y))
+                           for px, py in kvg.get('all_points', [])]
+            if len(_all_kvg_6k) >= 4:
+                mid_idx = len(_all_kvg_6k) // 2
+                first_dx = _all_kvg_6k[mid_idx][0] - _all_kvg_6k[0][0]
+                first_dy = _all_kvg_6k[mid_idx][1] - _all_kvg_6k[0][1]
+                first_is_h = abs(first_dx) > abs(first_dy)
+                # H→V: 横→縦（㇕, ㇖）→ 角点 = (end.x, start.y)
+                # V→H: 縦→横（㇄, ㇆の一部）→ 角点 = (start.x, end.y)
+                if first_is_h:
+                    cp = (e_x, s_y)
+                else:
+                    cp = (s_x, e_y)
+                # 角点が始点/終点と十分離れている場合のみ挿入
+                d_start = ((cp[0]-s_x)**2 + (cp[1]-s_y)**2)**0.5
+                d_end = ((cp[0]-e_x)**2 + (cp[1]-e_y)**2)**0.5
+                if d_start > 10 and d_end > 10:
+                    simplified = [(s_x, s_y), cp, (e_x, e_y)]
+                    direction = "H→V" if first_is_h else "V→H"
+                    print(f"    6k: 角点復元 ({cp[0]},{cp[1]}) {direction}")
+        # 6g. ㇕/㇆/㇄/㇖ 直角強制
         # 台形化を防止: 角点を調整して完全な直角を作る
-        # ㇕/㇆ は漢字では常に直角（水平→垂直 or 垂直→水平）
-        if any(c in stroke_type for c in ['㇕', '㇆']) and len(simplified) >= 3:
+        # ㇕/㇆/㇄/㇖ は漢字では常に直角（水平→垂直 or 垂直→水平）
+        if any(c in stroke_type for c in ['㇕', '㇆', '㇄', '㇖']) and len(simplified) >= 3:
             # 角点を見つける（H/V遷移を形成する点を優先）
             # start→ci方向とci→end方向でH/Vが切り替わる点が真の角
             best_ci = None
