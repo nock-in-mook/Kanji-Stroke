@@ -1529,6 +1529,7 @@ def generate_strokes(kanji: str, debug=False) -> dict:
     # 5-8. 各画のマッチング + 経路探索
     result_strokes = []
     used_end_nodes = set()  # 使用済み終点ノードID（後続ストロークで回避）
+    accumulated_offsets_y = []  # 蓄積Y軸オフセット（ノードマッチング改善用）
     for si, kvg in enumerate(kvg_strokes):
         stroke_idx = si  # ラベルマップ用のストロークインデックス（0-based）
         print(f"\n  画{kvg['num']} ({kvg['id']}): type={kvg['type']}")
@@ -1539,10 +1540,15 @@ def generate_strokes(kanji: str, debug=False) -> dict:
         mid_scaled = [(mx * KVG_SCALE, my * KVG_SCALE) for mx, my in kvg['mid_points']]
         print(f"    始点: ({sx:.1f}, {sy:.1f}) → 終点: ({ex:.1f}, {ey:.1f})")
 
+        # 推定Y軸オフセット（前のストロークの結果から推定、ノードマッチング改善用）
+        est_offset_y = round(sum(accumulated_offsets_y) / len(accumulated_offsets_y)) if accumulated_offsets_y else 0
+
         # 最寄りのグラフノードを特定（骨格ピクセル経由で精度向上）
-        # KVG-骨格Yオフセットがあるため、骨格ピクセル経由の方が正確
-        start_skel = find_nearest_skeleton_pixel(skel, round(sx), round(sy), search_radius=55)
-        end_skel = find_nearest_skeleton_pixel(skel, round(ex), round(ey), search_radius=55)
+        # 推定Y軸オフセットを適用して骨格検索（KVG座標のY位置を補正）
+        search_sy = round(sy + est_offset_y)
+        search_ey = round(ey + est_offset_y)
+        start_skel = find_nearest_skeleton_pixel(skel, round(sx), search_sy, search_radius=55)
+        end_skel = find_nearest_skeleton_pixel(skel, round(ex), search_ey, search_radius=55)
         if start_skel:
             start_node = find_nearest_node(nodes, start_skel[0], start_skel[1], max_dist=30)
         else:
@@ -1684,6 +1690,10 @@ def generate_strokes(kanji: str, debug=False) -> dict:
             guide_points += [(round(ex), round(ey))]
         if abs(kvg_offset_y) > 3:
             print(f"    KVG-骨格Y補正: {kvg_offset_y:+.0f}px")
+
+        # オフセットを蓄積（後続ストロークのノードマッチング改善用）
+        if abs(kvg_offset_y) > 3:
+            accumulated_offsets_y.append(kvg_offset_y)
 
         # ウェイポイント + ガイド考慮Dijkstraで経路探索
         path_pixels = None
@@ -2197,6 +2207,48 @@ def generate_strokes(kanji: str, debug=False) -> dict:
             simplified = rdp_simplify(simplified, epsilon=12.0)
             if len(simplified) < before:
                 print(f"    6i: ㇄平滑化 {before}→{len(simplified)}点")
+        # 6j. ㇔（点）ストロークの長さ制限
+        # KVGパス長の1.5倍を超えたら切り詰め（骨格分岐に引きずられて長くなるのを防止）
+        if '㇔' in stroke_type and len(simplified) >= 2:
+            kvg_dist = ((ex - sx)**2 + (ey - sy)**2)**0.5
+            gen_dist = sum(((simplified[i+1][0]-simplified[i][0])**2 +
+                           (simplified[i+1][1]-simplified[i][1])**2)**0.5
+                          for i in range(len(simplified)-1))
+            max_len = kvg_dist * 1.5
+            if gen_dist > max_len and kvg_dist > 5:
+                # パスを切り詰め
+                ratio = max_len / gen_dist
+                if len(simplified) == 2:
+                    # 2点パス: 終点を始点方向に引き寄せ
+                    x0, y0 = simplified[0]
+                    x1, y1 = simplified[1]
+                    new_x = round(x0 + (x1 - x0) * ratio)
+                    new_y = round(y0 + (y1 - y0) * ratio)
+                    simplified = [(x0, y0), (new_x, new_y)]
+                else:
+                    # 多点パス: 累積距離で切り詰め位置を算出
+                    cumul = [0.0]
+                    for i in range(len(simplified)-1):
+                        d = ((simplified[i+1][0]-simplified[i][0])**2 +
+                             (simplified[i+1][1]-simplified[i][1])**2)**0.5
+                        cumul.append(cumul[-1] + d)
+                    new_pts = [simplified[0]]
+                    for i in range(1, len(simplified)):
+                        if cumul[i] <= max_len:
+                            new_pts.append(simplified[i])
+                        else:
+                            # 前の点からの補間
+                            remain = max_len - cumul[i-1]
+                            seg_len = cumul[i] - cumul[i-1]
+                            if seg_len > 0:
+                                t = remain / seg_len
+                                ix = round(simplified[i-1][0] + (simplified[i][0]-simplified[i-1][0]) * t)
+                                iy = round(simplified[i-1][1] + (simplified[i][1]-simplified[i-1][1]) * t)
+                                new_pts.append((ix, iy))
+                            break
+                    simplified = new_pts
+                print(f"    6j: ㇔長さ制限 {gen_dist:.0f}→{max_len:.0f}px (KVG={kvg_dist:.0f})")
+
         # 7. 最終クリッピング（RDP後のポイントもアウトライン内に）
         simplified = clip_to_outline(simplified, bmp)
         print(f"    経路: {len(path_pixels)}px → {len(simplified)}点")
