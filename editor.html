@@ -2,8 +2,8 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>書き順エディタ</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>書き順エディタ v2</title>
 <style>
   @font-face {
     font-family: 'Klee One';
@@ -12,488 +12,1065 @@
     font-display: swap;
   }
   * { margin:0; padding:0; box-sizing:border-box; }
-  body { display:flex; flex-direction:column; align-items:center; min-height:100vh; background:#f0f0f0; font-family:sans-serif; padding:20px; }
-
-  /* ヘッダー: 漢字入力 + 画数表示 */
-  .header { display:flex; align-items:center; gap:16px; margin-bottom:16px; flex-wrap:wrap; justify-content:center; }
-  #kanjiInput {
-    font-size:32px; width:64px; text-align:center;
-    border:2px solid #ddd; border-radius:8px; padding:4px;
-    font-family:'Klee One', serif;
+  body {
+    display:flex; flex-direction:column; min-height:100vh;
+    background:#f5f5f5; color:#333; font-family:sans-serif;
   }
-  #strokeCount { font-size:16px; color:#666; font-weight:700; }
 
-  /* キャンバスエリア */
-  .canvas-area { position:relative; width:300px; height:300px; background:#fff; border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,0.1); overflow:hidden; }
+  /* === ヘッダー === */
+  .header {
+    display:flex; align-items:center; gap:10px; padding:6px 10px;
+    background:#fff; border-bottom:1px solid #ddd;
+  }
+  .header select {
+    font-size:14px; padding:3px 6px; border-radius:4px;
+    background:#fff; color:#333; border:1px solid #ccc;
+  }
+  .progress-text { font-size:13px; color:#888; white-space:nowrap; }
+  .progress-bar {
+    flex:1; max-width:100px; height:6px; background:#e0e0e0; border-radius:3px; overflow:hidden;
+  }
+  .progress-fill { height:100%; background:#e53935; transition:width 0.3s; }
+  .header .spacer { flex:1; }
+  .save-btn {
+    padding:4px 14px; font-size:13px; font-weight:700;
+    background:#e53935; color:#fff; border:none; border-radius:4px; cursor:pointer;
+  }
+  .save-btn:active { background:#c62828; }
+  .save-btn.saved { background:#43a047; }
 
-  /* フォント参照文字（薄く表示） */
-  .ref-char { position:absolute; top:0; left:0; width:100%; height:100%; display:flex; align-items:center; justify-content:center;
-    font-family:'Klee One', serif; font-size:250px; font-weight:600; color:rgba(200,200,200,0.4);
-    line-height:1; user-select:none; pointer-events:none; }
+  /* === メインレイアウト === */
+  .main-area {
+    display:flex; flex:1; overflow:hidden;
+  }
 
-  /* SVGを上に重ねる */
-  .stroke-svg { position:absolute; top:0; left:0; width:100%; height:100%; }
+  /* 左: ステップ一覧（KVG+Mine対） */
+  .step-list {
+    width:130px; overflow-y:auto; background:#fafafa; border-right:1px solid #ddd;
+    padding:4px; display:flex; flex-direction:column; gap:2px;
+  }
+  .step-row {
+    display:flex; align-items:center; gap:2px; cursor:pointer;
+    border-radius:4px; padding:1px;
+  }
+  .step-row:hover { background:#e8e8e8; }
+  .step-row.active { background:#fff3e0; }
+  .step-row.selected { background:#e3f2fd; outline:2px solid #1e88e5; }
+  .step-num {
+    width:16px; font-size:11px; font-weight:700; color:#999;
+    text-align:center; flex-shrink:0;
+  }
+  .step-row.active .step-num { color:#e53935; }
+  .step-row.selected .step-num { color:#1e88e5; }
+  .step-thumb {
+    width:50px; height:50px; background:#fff; border:1px solid #ddd;
+    border-radius:3px; flex-shrink:0; overflow:hidden;
+  }
+  .step-thumb svg { width:100%; height:100%; }
+  .step-thumb.kvg { border-color:#ccc; }
+  .step-thumb.mine { border-color:#90caf9; }
 
-  /* ボタン */
-  .controls { margin-top:12px; display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
-  button { padding:10px 18px; font-size:14px; border:none; border-radius:8px; cursor:pointer; background:#FF8E53; color:#fff; font-weight:700; }
-  button:active { background:#e07040; }
-  button.secondary { background:#aaa; }
-  button.danger { background:#e53935; }
-  button.taper-on { background:#e53935 !important; }
+  /* 中央: キャンバス + ツール */
+  .center-area {
+    flex:1; display:flex; flex-direction:column; align-items:center;
+    min-width:0; overflow:hidden;
+  }
 
-  /* JSON出力エリア */
-  #outputArea { display:none; margin-top:16px; width:100%; max-width:400px; }
-  #jsonOutput { width:100%; height:160px; font-size:12px; font-family:monospace; border:1px solid #ddd; border-radius:8px; padding:8px; resize:vertical; }
-  .output-controls { margin-top:8px; display:flex; gap:12px; justify-content:center; }
+  /* ツールバー（キャンバス直上） */
+  .canvas-tools {
+    display:flex; gap:4px; padding:6px 0 2px 0;
+  }
+  .tool-btn {
+    width:44px; height:36px; border:1px solid #ccc; border-radius:6px;
+    background:#fff; cursor:pointer; font-size:16px;
+    display:flex; align-items:center; justify-content:center;
+    color:#555;
+  }
+  .tool-btn:active { background:#eee; }
+  .tool-btn.active { background:#e53935; color:#fff; border-color:#e53935; }
 
-  /* ヒント */
-  .toggle-label { margin-top:8px; font-size:14px; color:#666; display:flex; align-items:center; gap:8px; }
-  .hint { margin-top:16px; color:#888; font-size:13px; text-align:center; line-height:1.8; max-width:340px; }
+  /* モード切替バー（キャンバス直下） */
+  .mode-toggle-bar {
+    display:flex; gap:6px; padding:4px 0 2px 0;
+  }
+  .mode-btn {
+    height:30px; padding:0 12px; border:1px solid #ccc; border-radius:15px;
+    background:#fff; cursor:pointer; font-size:12px; font-weight:700;
+    color:#555; display:flex; align-items:center; gap:4px;
+    transition: all 0.15s;
+  }
+  .mode-btn:active { background:#eee; }
+  .mode-btn.active { background:#1e88e5; color:#fff; border-color:#1e88e5; }
+  .mode-btn.taper-active { background:#ff9800; color:#fff; border-color:#ff9800; }
+
+  /* キャンバス */
+  .canvas-area {
+    position:relative; width:300px; height:300px;
+    background:#fff; border:1px solid #ccc; border-radius:4px; overflow:hidden;
+    touch-action:pan-x pan-y pinch-zoom;
+  }
+  .ref-char {
+    position:absolute; top:0; left:0; width:100%; height:300px;
+    font-family:'Klee One', serif; font-size:250px; font-weight:600;
+    color:rgba(180,180,180,0.35); line-height:1;
+    user-select:none; pointer-events:none;
+    text-align:center;
+    display:none;
+  }
+  .stroke-svg {
+    position:absolute; top:0; left:0; width:100%; height:100%;
+  }
+
+  /* 漢字ナビ（キャンバス下） */
+  .kanji-nav {
+    display:flex; align-items:center; justify-content:center; gap:10px;
+    padding:6px 0;
+  }
+  .kanji-preview {
+    width:40px; height:40px; display:flex; align-items:center; justify-content:center;
+    font-family:'Klee One', serif; font-size:30px; font-weight:600;
+    color:#aaa; background:#fff; border:1px solid #ddd; border-radius:4px;
+  }
+  .kanji-preview.current {
+    font-size:34px; color:#e53935; border:2px solid #e53935;
+  }
+  .nav-btn {
+    width:36px; height:36px; border:1px solid #ccc; border-radius:6px;
+    background:#fff; cursor:pointer; font-size:18px; color:#555;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .nav-btn:active { background:#eee; }
+  .nav-btn:disabled { opacity:0.3; cursor:default; }
+
+  /* 画情報 */
+  .stroke-info-bar {
+    font-size:12px; color:#999; padding:2px 0 4px 0;
+  }
+
+  /* スクロールバー */
+  .step-list::-webkit-scrollbar { width:4px; }
+  .step-list::-webkit-scrollbar-track { background:transparent; }
+  .step-list::-webkit-scrollbar-thumb { background:#ccc; border-radius:2px; }
 </style>
 </head>
 <body>
 
+<!-- ヘッダー -->
 <div class="header">
-  <input id="kanjiInput" type="text" maxlength="1" placeholder="字">
-  <span id="strokeCount">タップして点を配置</span>
+  <select id="gradeSelect"></select>
+  <span class="progress-text" id="progressText">0/80</span>
+  <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+  <div class="spacer"></div>
+  <button class="save-btn" id="saveBtn" onclick="saveData()">SAVE</button>
 </div>
 
-<div class="canvas-area" id="canvasArea">
-  <!-- フォント参照文字 -->
-  <div class="ref-char" id="refChar"></div>
+<div class="main-area">
+  <!-- 左: ステップ一覧 -->
+  <div class="step-list" id="stepList"></div>
 
-  <!-- 描画SVG -->
-  <svg id="drawSvg" class="stroke-svg" viewBox="0 0 300 300" style="touch-action:manipulation;">
-    <!-- ガイド十字線 -->
-    <line x1="150" y1="0" x2="150" y2="300" stroke="#eee" stroke-width="0.5" stroke-dasharray="6,6"/>
-    <line x1="0" y1="150" x2="300" y2="150" stroke="#eee" stroke-width="0.5" stroke-dasharray="6,6"/>
-  </svg>
-</div>
+  <!-- 中央 -->
+  <div class="center-area">
+    <!-- ツール5つ -->
+    <div class="canvas-tools">
+      <button class="tool-btn active" id="toolDraw" onclick="setTool('draw')" title="描画">&#x270F;</button>
+      <button class="tool-btn" id="toolSelect" onclick="setTool('select')" title="選択">&#x25CB;</button>
+      <button class="tool-btn" id="toolErase" onclick="setTool('erase')" title="消しゴム">&#x2702;</button>
+      <button class="tool-btn" id="toolUndo" onclick="undoAction()" title="Undo">&#x21A9;</button>
+      <button class="tool-btn active" id="toolSnap" onclick="toggleSnap()" title="スナップ">S</button>
+    </div>
 
-<div class="controls">
-  <button onclick="confirmStroke()">画を確定</button>
-  <button class="secondary" onclick="undoPoint()">点を消す</button>
-  <button class="secondary" onclick="undoStroke()">画を消す</button>
-  <button class="danger" onclick="clearAll()">全消し</button>
-</div>
-<div class="controls">
-  <button onclick="autoRegisterStrokes()">KVG自動登録</button>
-  <button onclick="exportJSON()">JSON出力</button>
-  <button class="secondary" onclick="togglePoints()">参照を表示</button>
-  <button id="taperBtn" class="secondary" onclick="toggleTaperMode()">テーパー</button>
-</div>
+    <!-- キャンバス -->
+    <div class="canvas-area" id="canvasArea">
+      <div class="ref-char" id="refChar"></div>
+      <svg id="drawSvg" class="stroke-svg" viewBox="0 0 300 300">
+        <!-- 参照文字（SVG textで描画、Canvas座標と完全一致） -->
+        <text id="svgRefChar" x="150" y="259" text-anchor="middle"
+              font-family="'Klee One', serif" font-size="250" font-weight="600"
+              fill="rgba(180,180,180,0.35)" pointer-events="none"></text>
+        <line x1="150" y1="0" x2="150" y2="300" stroke="#eee" stroke-width="0.5" stroke-dasharray="6,6"/>
+        <line x1="0" y1="150" x2="300" y2="150" stroke="#eee" stroke-width="0.5" stroke-dasharray="6,6"/>
+      </svg>
+    </div>
 
-<label class="toggle-label">
-  <input type="checkbox" id="centerSnap" checked onchange="drawCenterLines()"> 中心スナップ
-</label>
+    <!-- モード切替（直線/曲線 + はね・はらい） -->
+    <div class="mode-toggle-bar">
+      <button class="mode-btn active" id="modeCurve" onclick="toggleCurveMode()">&#x301C; 曲線</button>
+      <button class="mode-btn" id="modeTaper" onclick="toggleTaperMode()">&#x2728; はね・はらい</button>
+    </div>
 
-<div id="outputArea">
-  <textarea id="jsonOutput" readonly></textarea>
-  <div class="output-controls">
-    <button onclick="copyToClipboard()">コピー</button>
+    <!-- 画操作ボタン -->
+    <div class="canvas-tools">
+      <button class="tool-btn" onclick="prevStroke()" title="前の画">&#x25C1;</button>
+      <button class="tool-btn" onclick="confirmStroke()" title="画を確定" style="width:auto;padding:0 12px;font-size:13px;font-weight:700;">&#x2714; 確定</button>
+      <button class="tool-btn" onclick="deleteStroke()" title="画を削除" style="color:#e53935;">&#x2716;</button>
+      <button class="tool-btn" onclick="nextStroke()" title="次の画">&#x25B7;</button>
+    </div>
+
+    <span class="stroke-info-bar" id="strokeInfo">0/? 画</span>
+
+    <!-- 漢字ナビ -->
+    <div class="kanji-nav">
+      <div class="kanji-preview" id="prevPreview"></div>
+      <button class="nav-btn" id="prevBtn" onclick="prevKanji()">&#x25C0;</button>
+      <div class="kanji-preview current" id="currentPreview"></div>
+      <button class="nav-btn" id="nextBtn" onclick="nextKanji()">&#x25B6;</button>
+      <div class="kanji-preview" id="nextPreview"></div>
+    </div>
   </div>
 </div>
 
-<div class="hint">
-  タップで点を配置 → 「画を確定」で滑らかな曲線を生成<br>
-  直線の画は2点、曲線は3点以上で<br>
-  「テーパー」ONで画をタップ → はね/はらい切替
-</div>
-
 <script>
-// --- 定数 ---
-const STROKE_COLORS = [
-  '#e53935', '#1e88e5', '#43a047', '#fb8c00',
-  '#8e24aa', '#00acc1', '#6d4c41', '#546e7a'
-];
+// =========================================
+// 定数
+// =========================================
 const SVG_NS = 'http://www.w3.org/2000/svg';
+const KVG_SCALE = 300 / 109;
+const COLOR_DONE = '#1e88e5';   // 既存画=青
+const COLOR_ACTIVE = '#e53935'; // 現在画=赤
+const COLOR_SELECT = '#7c4dff'; // 選択中=紫
 
-// --- 状態 ---
-let tapPoints = [];         // 現在の画の配置点 [{x, y}, ...]
-let splineStrokes = [];     // 確定済み [{points: [{x,y}...], path: "M...C..."}]
-let dragIdx = -1;              // ドラッグ中の点インデックス (-1=なし)
-let isDragging = false;        // ドラッグ中フラグ
-let lastSnappedPos = null;     // スナップカーソルが表示していた位置（指離し時にこの位置を使う）
-let taperMode = false;         // テーパーモード（はね/はらい登録用）
+// =========================================
+// API設定（ローカル or Cloudflare Worker）
+// =========================================
+const API_BASE = location.hostname === 'localhost'
+  ? ''  // ローカルサーバー
+  : 'https://kanji-stroke-api.yagukyou.workers.dev';
 
-// --- DOM参照 ---
+// =========================================
+// 状態
+// =========================================
+let allKanji = [];
+let currentGrade = 1;
+let currentIndex = 0;
+let gradeKanji = [];
+
+let tapPoints = [];       // {x, y, curve}
+let splineStrokes = [];   // {points, path, taper}
+let currentTool = 'draw';
+let centerSnapOn = true;
+let curveMode = true;     // true=曲線, false=直線
+let taperMode = false;    // はね・はらい設定モード
+let isDirty = false;
+
+let kvgPaths = [];
+
+// ドラッグ（描画モード）
+let dragIdx = -1;
+let isDragging = false;
+let tapStartPos = null;
+let tapStartTime = 0;
+let lastSnappedPos = null;
+
+// 選択ツール
+let selectedStrokeIdx = -1;
+let selectedPointIdx = -1;
+let selectDragging = false;
+
+// 中心線キャッシュ
+let cachedCenterKanji = '';
+let cachedCenterPoints = [];
+let cachedCenterLines = [];
+
+// =========================================
+// DOM
+// =========================================
 const svg = document.getElementById('drawSvg');
-const kanjiInput = document.getElementById('kanjiInput');
 const refChar = document.getElementById('refChar');
-const strokeCountEl = document.getElementById('strokeCount');
+const gradeSelect = document.getElementById('gradeSelect');
+const progressText = document.getElementById('progressText');
+const progressFill = document.getElementById('progressFill');
+const strokeInfo = document.getElementById('strokeInfo');
+const saveBtn = document.getElementById('saveBtn');
 
-// 中心線表示グループ（タップ点の下に描画）
+// SVGグループ
 const centerLineGroup = document.createElementNS(SVG_NS, 'g');
-centerLineGroup.id = 'centerLines';
 centerLineGroup.setAttribute('pointer-events', 'none');
 svg.appendChild(centerLineGroup);
 
-// タップ点・曲線プレビュー用グループ
 const tapGroup = document.createElementNS(SVG_NS, 'g');
-tapGroup.id = 'tapGroup';
 svg.appendChild(tapGroup);
 
-// スナップカーソル（タップ前にスナップ先をプレビュー）
-const snapCursorGroup = document.createElementNS(SVG_NS, 'g');
-snapCursorGroup.id = 'snapCursor';
-snapCursorGroup.style.display = 'none';
-snapCursorGroup.setAttribute('pointer-events', 'none');
-svg.appendChild(snapCursorGroup);
-const scH = document.createElementNS(SVG_NS, 'line');
-scH.setAttribute('stroke', '#FF8E53');
-scH.setAttribute('stroke-width', '1.5');
-scH.setAttribute('stroke-opacity', '0.8');
-const scV = document.createElementNS(SVG_NS, 'line');
-scV.setAttribute('stroke', '#FF8E53');
-scV.setAttribute('stroke-width', '1.5');
-scV.setAttribute('stroke-opacity', '0.8');
-const scDot = document.createElementNS(SVG_NS, 'circle');
-scDot.setAttribute('r', '3');
-scDot.setAttribute('fill', '#FF8E53');
-scDot.setAttribute('fill-opacity', '0.8');
-snapCursorGroup.appendChild(scH);
-snapCursorGroup.appendChild(scV);
-snapCursorGroup.appendChild(scDot);
+// プレビュー用：新しい点を置く前にスナップ位置をリアルタイム表示
+let previewPoint = null;
 
-// 計測用の一時パス（テーパー描画・ヒットテスト用、非表示）
 const measurePath = document.createElementNS(SVG_NS, 'path');
 measurePath.style.visibility = 'hidden';
 measurePath.setAttribute('pointer-events', 'none');
 svg.appendChild(measurePath);
 
-function showSnapCursor(x, y) {
-  scH.setAttribute('x1', x - 10); scH.setAttribute('y1', y);
-  scH.setAttribute('x2', x + 10); scH.setAttribute('y2', y);
-  scV.setAttribute('x1', x); scV.setAttribute('y1', y - 10);
-  scV.setAttribute('x2', x); scV.setAttribute('y2', y + 10);
-  scDot.setAttribute('cx', x); scDot.setAttribute('cy', y);
-  snapCursorGroup.style.display = '';
-}
-function hideSnapCursor() { snapCursorGroup.style.display = 'none'; }
+// =========================================
+// 初期化
+// =========================================
+async function init() {
+  const resp = await fetch(`${API_BASE}/api/list`);
+  allKanji = await resp.json();
+  const grades = [...new Set(allKanji.map(k => k.grade))].sort();
+  grades.forEach(g => {
+    const opt = document.createElement('option');
+    opt.value = g; opt.textContent = g + '\u5E74\u751F';
+    gradeSelect.appendChild(opt);
+  });
 
-// 中心線キャッシュ
-let cachedCenterKanji = '';
-let cachedCenterPoints = [];  // スナップ用: [{x, y}, ...]
-let cachedCenterLines = [];   // 描画用: [[ {x,y}, ... ], ...]
-let cachedSkeletonBmp = null;  // 骨格ビットマップ（自動登録用）
-
-// ===========================
-// 漢字入力 → フォントオーバーレイ
-// ===========================
-kanjiInput.addEventListener('input', function() {
-  if (this.value.length > 1) {
-    this.value = this.value[this.value.length - 1];
+  const hash = location.hash.slice(1);
+  if (hash) {
+    const [g] = hash.split('-');
+    if (g) { currentGrade = parseInt(g); gradeSelect.value = currentGrade; }
   }
-  refChar.textContent = this.value;
-  cachedCenterKanji = '';  // キャッシュ無効化
-  // 漢字変更時にストロークをクリア
-  tapPoints = [];
-  splineStrokes = [];
-  redrawTapUI();
-  updateStrokeCount();
-  document.getElementById('outputArea').style.display = 'none';
-  drawCenterLines();
-});
 
-// ===========================
-// 座標変換: 画面座標 → SVG座標
-// ===========================
-function getSvgPoint(e) {
-  const rect = svg.getBoundingClientRect();
-  const scaleX = 300 / rect.width;
-  const scaleY = 300 / rect.height;
-  return {
-    x: (e.clientX - rect.left) * scaleX,
-    y: (e.clientY - rect.top) * scaleY
-  };
+  gradeSelect.addEventListener('change', () => {
+    autoSave();
+    currentGrade = parseInt(gradeSelect.value);
+    currentIndex = 0;
+    loadGrade();
+  });
+
+  loadGrade();
 }
 
-// ===========================
-// ポインターイベント: タップで点配置 + ドラッグ移動
-// ===========================
-let tapStartPos = null;
-let tapStartTime = 0;
-
-svg.addEventListener('pointerdown', (e) => {
-  e.preventDefault();
-  svg.setPointerCapture(e.pointerId);
-  tapStartPos = getSvgPoint(e);
-  tapStartTime = Date.now();
-
-  // テーパーモード: 位置記録のみ
-  if (taperMode) return;
-
-  // 既存の点に近いか確認 → ドラッグ開始候補
-  dragIdx = -1;
-  isDragging = false;
-  for (let i = 0; i < tapPoints.length; i++) {
-    const d = Math.hypot(tapPoints[i].x - tapStartPos.x, tapPoints[i].y - tapStartPos.y);
-    if (d < 20) {
-      dragIdx = i;
-      break;
+function loadGrade() {
+  gradeKanji = allKanji.filter(k => k.grade === currentGrade);
+  updateProgress();
+  const hash = location.hash.slice(1);
+  if (hash) {
+    const [, code] = hash.split('-');
+    if (code) {
+      const idx = gradeKanji.findIndex(k => k.unicode === code);
+      if (idx >= 0) currentIndex = idx;
     }
   }
+  loadCurrentKanji();
+}
 
-  // ドラッグ対象でなければ、スナップ先をプレビュー
-  if (dragIdx < 0) {
-    const snapped = applySnap({ x: Math.round(tapStartPos.x), y: Math.round(tapStartPos.y) });
-    lastSnappedPos = snapped;
-    showSnapCursor(snapped.x, snapped.y);
-  }
-});
+async function loadCurrentKanji() {
+  if (gradeKanji.length === 0) return;
+  const k = gradeKanji[currentIndex];
+  location.hash = `${currentGrade}-${k.unicode}`;
+  document.getElementById('svgRefChar').textContent = k.kanji;
 
-svg.addEventListener('pointermove', (e) => {
-  if (!tapStartPos || taperMode) return;
-  const pt = getSvgPoint(e);
+  // ナビ更新
+  document.getElementById('currentPreview').textContent = k.kanji;
+  document.getElementById('prevPreview').textContent =
+    currentIndex > 0 ? gradeKanji[currentIndex - 1].kanji : '';
+  document.getElementById('nextPreview').textContent =
+    currentIndex < gradeKanji.length - 1 ? gradeKanji[currentIndex + 1].kanji : '';
+  document.getElementById('prevBtn').disabled = currentIndex <= 0;
+  document.getElementById('nextBtn').disabled = currentIndex >= gradeKanji.length - 1;
 
-  if (dragIdx >= 0) {
-    // ドラッグ中: 点を移動
-    isDragging = true;
-    const dragPt = { x: Math.round(pt.x), y: Math.round(pt.y - 40) };
-    tapPoints[dragIdx] = dragPt;
-    // ドラッグ中もスナップ先をプレビュー
-    const snapped = applySnap(dragPt);
-    lastSnappedPos = snapped;
-    showSnapCursor(snapped.x, snapped.y);
-    redrawTapUI();
-  } else {
-    // 新規配置: スナップ先をリアルタイム更新
-    const snapped = applySnap({ x: Math.round(pt.x), y: Math.round(pt.y) });
-    lastSnappedPos = snapped;
-    showSnapCursor(snapped.x, snapped.y);
-  }
-});
+  // リセット
+  splineStrokes = [];
+  tapPoints = [];
+  selectedStrokeIdx = -1;
+  selectedPointIdx = -1;
+  cachedCenterKanji = '';
 
-svg.addEventListener('pointerup', (e) => {
-  hideSnapCursor();
-  if (!tapStartPos) return;
-  const pt = getSvgPoint(e);
-
-  // テーパーモード: ストロークのテーパー切替
-  if (taperMode) {
-    const dist = Math.hypot(pt.x - tapStartPos.x, pt.y - tapStartPos.y);
-    const elapsed = Date.now() - tapStartTime;
-    if (dist < 15 && elapsed < 500) {
-      const idx = hitTestStroke(pt);
-      if (idx >= 0) {
-        splineStrokes[idx].taper = !splineStrokes[idx].taper;
-        redrawTapUI();
+  // 保存済みデータを読み込み（手動データのみ = pointsがあるもの）
+  try {
+    const resp = await fetch(`${API_BASE}/api/load/${k.unicode}`);
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.source === 'editor' && data.strokes && data.strokes.length > 0 && data.strokes[0].points) {
+        splineStrokes = data.strokes.map(s => ({
+          points: s.points.map(p => ({
+            x: p.x, y: p.y,
+            curve: p.curve !== undefined ? p.curve : true
+          })),
+          path: s.path,
+          taper: s.taper || false
+        }));
       }
     }
-    tapStartPos = null;
+  } catch (e) {}
+
+  // KVG読み込み
+  kvgPaths = [];
+  try {
+    const resp = await fetch(`${API_BASE}/api/kvg/${k.unicode}`);
+    if (resp.ok) {
+      const svgText = await resp.text();
+      kvgPaths = parseKVG(svgText);
+    }
+  } catch (e) {}
+
+  isDirty = false;
+  drawCenterLines();
+  redrawAll();
+}
+
+// =========================================
+// 進捗
+// =========================================
+function updateProgress() {
+  const done = gradeKanji.filter(k => k.has_data).length;
+  const total = gradeKanji.length;
+  progressText.textContent = `${done}/${total}`;
+  progressFill.style.width = total > 0 ? `${(done / total * 100)}%` : '0%';
+}
+
+// =========================================
+// KVG解析
+// =========================================
+function parseKVG(svgText) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(svgText, 'image/svg+xml');
+  const paths = [...doc.querySelectorAll('path[id]')];
+  paths.sort((a, b) => {
+    const nA = parseInt(a.id.match(/s(\d+)$/)?.[1] || '0');
+    const nB = parseInt(b.id.match(/s(\d+)$/)?.[1] || '0');
+    return nA - nB;
+  });
+  return paths.map(p => ({
+    d: p.getAttribute('d'),
+    type: p.getAttributeNS('http://kanjivg.tagaini.net', 'type')
+       || p.getAttribute('kvg:type') || '',
+    id: p.id
+  }));
+}
+
+// =========================================
+// ステップパネル（KVG+Mine対、番号付き）
+// =========================================
+function renderStepPanels() {
+  const panel = document.getElementById('stepList');
+  panel.innerHTML = '';
+  const total = Math.max(kvgPaths.length, splineStrokes.length + 1, 1);
+
+  for (let i = 0; i < total; i++) {
+    const row = document.createElement('div');
+    row.className = 'step-row';
+    if (i === splineStrokes.length && currentTool === 'draw') row.classList.add('active');
+    if (i === selectedStrokeIdx) row.classList.add('selected');
+    row.onclick = () => jumpToStroke(i);
+
+    // 番号
+    const num = document.createElement('div');
+    num.className = 'step-num';
+    num.textContent = i + 1;
+    row.appendChild(num);
+
+    // KVGサムネイル
+    const kvgThumb = document.createElement('div');
+    kvgThumb.className = 'step-thumb kvg';
+    if (i < kvgPaths.length) {
+      const s = document.createElementNS(SVG_NS, 'svg');
+      s.setAttribute('viewBox', '0 0 109 109');
+      for (let j = 0; j < kvgPaths.length; j++) {
+        const p = document.createElementNS(SVG_NS, 'path');
+        p.setAttribute('d', kvgPaths[j].d);
+        p.setAttribute('fill', 'none');
+        p.setAttribute('stroke', '#ddd');
+        p.setAttribute('stroke-width', '3');
+        p.setAttribute('stroke-linecap', 'round');
+        s.appendChild(p);
+      }
+      for (let j = 0; j <= i; j++) {
+        const p = document.createElementNS(SVG_NS, 'path');
+        p.setAttribute('d', kvgPaths[j].d);
+        p.setAttribute('fill', 'none');
+        p.setAttribute('stroke', j === i ? COLOR_ACTIVE : COLOR_DONE);
+        p.setAttribute('stroke-width', j === i ? '4' : '3');
+        p.setAttribute('stroke-linecap', 'round');
+        s.appendChild(p);
+      }
+      kvgThumb.appendChild(s);
+    }
+    row.appendChild(kvgThumb);
+
+    // Mineサムネイル
+    const myThumb = document.createElement('div');
+    myThumb.className = 'step-thumb mine';
+    if (i < splineStrokes.length) {
+      const s = document.createElementNS(SVG_NS, 'svg');
+      s.setAttribute('viewBox', '0 0 300 300');
+      const txt = document.createElementNS(SVG_NS, 'text');
+      txt.setAttribute('x', '150'); txt.setAttribute('y', '259');
+      txt.setAttribute('text-anchor', 'middle');
+      txt.setAttribute('font-family', "'Klee One', serif");
+      txt.setAttribute('font-size', '250'); txt.setAttribute('font-weight', '600');
+      txt.setAttribute('fill', '#e0e0e0');
+      txt.textContent = gradeKanji[currentIndex]?.kanji || '';
+      s.appendChild(txt);
+      for (let j = 0; j <= i; j++) {
+        const p = document.createElementNS(SVG_NS, 'path');
+        p.setAttribute('d', splineStrokes[j].path);
+        p.setAttribute('fill', 'none');
+        p.setAttribute('stroke', j === i ? COLOR_ACTIVE : COLOR_DONE);
+        p.setAttribute('stroke-width', j === i ? '5' : '4');
+        p.setAttribute('stroke-linecap', 'round');
+        s.appendChild(p);
+      }
+      // テーパーマーカー（終点に丸印）
+      if (splineStrokes[i].taper && splineStrokes[i].points.length >= 2) {
+        const ep = splineStrokes[i].points[splineStrokes[i].points.length - 1];
+        const marker = document.createElementNS(SVG_NS, 'circle');
+        marker.setAttribute('cx', ep.x); marker.setAttribute('cy', ep.y);
+        marker.setAttribute('r', '8'); marker.setAttribute('fill', '#ff9800');
+        marker.setAttribute('fill-opacity', '0.7');
+        s.appendChild(marker);
+      }
+      myThumb.appendChild(s);
+    }
+    row.appendChild(myThumb);
+
+    panel.appendChild(row);
+  }
+}
+
+function jumpToStroke(idx) {
+  if (idx < splineStrokes.length) {
+    // 確定済みストロークを選択
+    setTool('select');
+    selectedStrokeIdx = idx;
+    selectedPointIdx = -1;
+    redrawAll();
+  } else {
+    // 描画モードで次のストロークへ
+    setTool('draw');
+    selectedStrokeIdx = -1;
+    selectedPointIdx = -1;
+    redrawAll();
+  }
+}
+
+// =========================================
+// 全体再描画
+// =========================================
+function redrawAll() {
+  drawCenterLines();
+  redrawTapUI();
+  renderStepPanels();
+  const total = kvgPaths.length || '?';
+  strokeInfo.textContent = `${splineStrokes.length}/${total} \u753B`;
+}
+
+// =========================================
+// ツール切替
+// =========================================
+function setTool(tool) {
+  currentTool = tool;
+  if (tool !== 'select') {
+    selectedStrokeIdx = -1;
+    selectedPointIdx = -1;
+  }
+  if (tool !== 'draw') {
+    previewPoint = null;
+  }
+  // ツールボタンのactive更新（snap/taperは独立トグル）
+  document.getElementById('toolDraw').classList.toggle('active', tool === 'draw');
+  document.getElementById('toolSelect').classList.toggle('active', tool === 'select');
+  document.getElementById('toolErase').classList.toggle('active', tool === 'erase');
+  redrawAll();
+}
+
+function toggleSnap() {
+  centerSnapOn = !centerSnapOn;
+  document.getElementById('toolSnap').classList.toggle('active', centerSnapOn);
+  drawCenterLines();
+}
+
+function toggleCurveMode() {
+  curveMode = !curveMode;
+  const btn = document.getElementById('modeCurve');
+  btn.classList.toggle('active', curveMode);
+  btn.innerHTML = curveMode ? '&#x301C; 曲線' : '&#x2015; 直線';
+}
+
+function toggleTaperMode() {
+  taperMode = !taperMode;
+  document.getElementById('modeTaper').classList.toggle('taper-active', taperMode);
+  if (taperMode) {
+    // テーパーモードON → 他のツール動作を維持しつつ、タップでテーパー切替
+  }
+  redrawAll();
+}
+
+function undoAction() {
+  if (currentTool === 'select') {
+    // 選択解除
+    selectedStrokeIdx = -1;
+    selectedPointIdx = -1;
+    setTool('draw');
     return;
   }
-
-  if (isDragging && dragIdx >= 0) {
-    // ドラッグ終了 → プレビューで表示していた位置をそのまま使う
-    if (lastSnappedPos) {
-      tapPoints[dragIdx] = lastSnappedPos;
-    }
-    redrawTapUI();
-  } else {
-    // タップ判定: 移動が少なく、短時間
-    const dist = Math.hypot(pt.x - tapStartPos.x, pt.y - tapStartPos.y);
-    const elapsed = Date.now() - tapStartTime;
-    if (dist < 15 && elapsed < 500) {
-      // プレビューで表示していた位置をそのまま使う
-      const newPt = lastSnappedPos || { x: Math.round(pt.x), y: Math.round(pt.y) };
-      tapPoints.push(newPt);
-      redrawTapUI();
-      updateStrokeCount();
-    }
+  if (tapPoints.length > 0) {
+    tapPoints.pop();
+  } else if (splineStrokes.length > 0) {
+    const last = splineStrokes.pop();
+    tapPoints = last.points;
+    isDirty = true;
   }
-  tapStartPos = null;
-  dragIdx = -1;
-  isDragging = false;
-  lastSnappedPos = null;
-});
+  redrawAll();
+}
 
-// タッチ制御: 1本指=タップ、2本指=スクロール＆ピンチズーム
-svg.addEventListener('touchstart', e => {
-  if (e.touches.length === 1) e.preventDefault();
-}, { passive: false });
-svg.addEventListener('touchmove', e => {
-  if (e.touches.length === 1) e.preventDefault();
-}, { passive: false });
-
-// ===========================
-// Catmull-Rom スプライン → SVGパス
-// ===========================
-function catmullRomToPath(points) {
+// =========================================
+// パス生成（直線/曲線混在対応）
+// =========================================
+function buildStrokePath(points) {
   if (points.length < 2) return '';
-  if (points.length === 2) {
-    return `M ${points[0].x},${points[0].y} L ${points[1].x},${points[1].y}`;
-  }
-
   let d = `M ${points[0].x},${points[0].y}`;
   for (let i = 0; i < points.length - 1; i++) {
-    const p0 = points[Math.max(0, i - 1)];
     const p1 = points[i];
     const p2 = points[i + 1];
-    const p3 = points[Math.min(points.length - 1, i + 2)];
-
-    // Catmull-Rom → 3次ベジェの制御点
-    const cp1x = p1.x + (p2.x - p0.x) / 6;
-    const cp1y = p1.y + (p2.y - p0.y) / 6;
-    const cp2x = p2.x - (p3.x - p1.x) / 6;
-    const cp2y = p2.y - (p3.y - p1.y) / 6;
-
-    d += ` C ${Math.round(cp1x)},${Math.round(cp1y)} ${Math.round(cp2x)},${Math.round(cp2y)} ${p2.x},${p2.y}`;
+    if (!p1.curve) {
+      // 直線セグメント
+      d += ` L ${p2.x},${p2.y}`;
+    } else {
+      // Catmull-Rom曲線セグメント
+      const p0 = points[Math.max(0, i - 1)];
+      const p3 = points[Math.min(points.length - 1, i + 2)];
+      const cp1x = p1.x + (p2.x - p0.x) / 6;
+      const cp1y = p1.y + (p2.y - p0.y) / 6;
+      const cp2x = p2.x - (p3.x - p1.x) / 6;
+      const cp2y = p2.y - (p3.y - p1.y) / 6;
+      d += ` C ${Math.round(cp1x)},${Math.round(cp1y)} ${Math.round(cp2x)},${Math.round(cp2y)} ${p2.x},${p2.y}`;
+    }
   }
   return d;
 }
 
-// ===========================
-// タップUI描画
-// ===========================
+// =========================================
+// キャンバス描画
+// =========================================
 function redrawTapUI() {
   tapGroup.innerHTML = '';
 
   // 確定済みストローク
   splineStrokes.forEach((stroke, i) => {
-    const color = STROKE_COLORS[i % STROKE_COLORS.length];
-
-    // 全ストローク均一幅で描画（テーパーデータは保持するが描画では使わない）
+    const isSelected = (i === selectedStrokeIdx);
     const path = document.createElementNS(SVG_NS, 'path');
     path.setAttribute('d', stroke.path);
     path.setAttribute('fill', 'none');
-    path.setAttribute('stroke', color);
-    path.setAttribute('stroke-width', '10');
+    path.setAttribute('stroke', isSelected ? COLOR_SELECT : COLOR_DONE);
+    path.setAttribute('stroke-width', isSelected ? '12' : '10');
     path.setAttribute('stroke-linecap', 'round');
     path.setAttribute('stroke-linejoin', 'round');
+    if (isSelected) path.setAttribute('stroke-opacity', '0.7');
     tapGroup.appendChild(path);
+
+    // テーパーマーカー（終点に目立つ丸印）
+    if (stroke.taper && stroke.points.length >= 2) {
+      const ep = stroke.points[stroke.points.length - 1];
+      const m = document.createElementNS(SVG_NS, 'circle');
+      m.setAttribute('cx', ep.x); m.setAttribute('cy', ep.y);
+      m.setAttribute('r', '6'); m.setAttribute('fill', '#ff9800');
+      m.setAttribute('fill-opacity', '0.8');
+      m.setAttribute('stroke', '#fff'); m.setAttribute('stroke-width', '1.5');
+      tapGroup.appendChild(m);
+    }
+
+    // 選択中のストロークの制御点を表示
+    if (isSelected) {
+      stroke.points.forEach((pt, j) => {
+        const isSelPt = (j === selectedPointIdx);
+        const r = isSelPt ? 10 : 7;
+        const c = document.createElementNS(SVG_NS, 'circle');
+        c.setAttribute('cx', pt.x); c.setAttribute('cy', pt.y);
+        c.setAttribute('r', r); c.setAttribute('fill', 'none');
+        c.setAttribute('stroke', COLOR_SELECT);
+        c.setAttribute('stroke-width', isSelPt ? '2.5' : '1.5');
+        tapGroup.appendChild(c);
+        const dot = document.createElementNS(SVG_NS, 'circle');
+        dot.setAttribute('cx', pt.x); dot.setAttribute('cy', pt.y);
+        dot.setAttribute('r', isSelPt ? '3' : '2');
+        dot.setAttribute('fill', COLOR_SELECT);
+        tapGroup.appendChild(dot);
+        // 直線/曲線インジケータ
+        if (!pt.curve) {
+          const mark = document.createElementNS(SVG_NS, 'rect');
+          mark.setAttribute('x', pt.x - 3); mark.setAttribute('y', pt.y - r - 8);
+          mark.setAttribute('width', '6'); mark.setAttribute('height', '3');
+          mark.setAttribute('fill', COLOR_SELECT); mark.setAttribute('fill-opacity', '0.6');
+          tapGroup.appendChild(mark);
+        }
+      });
+    }
   });
 
-  // 現在配置中のプレビュー曲線
-  const curColor = STROKE_COLORS[splineStrokes.length % STROKE_COLORS.length];
-  if (tapPoints.length >= 2) {
-    const previewD = catmullRomToPath(tapPoints);
-    const preview = document.createElementNS(SVG_NS, 'path');
-    preview.setAttribute('d', previewD);
-    preview.setAttribute('fill', 'none');
-    preview.setAttribute('stroke', curColor);
-    preview.setAttribute('stroke-width', '10');
-    preview.setAttribute('stroke-linecap', 'round');
-    preview.setAttribute('stroke-linejoin', 'round');
-    preview.setAttribute('stroke-opacity', '0.35');
-    tapGroup.appendChild(preview);
+  // プレビュー点を含めたカーブ表示用の配列（描画モード）
+  if (currentTool === 'draw') {
+    const allPts = previewPoint
+      ? [...tapPoints, {x: previewPoint.x, y: previewPoint.y, curve: curveMode}]
+      : tapPoints;
+
+    if (allPts.length >= 2) {
+      const previewD = buildStrokePath(allPts);
+      const preview = document.createElementNS(SVG_NS, 'path');
+      preview.setAttribute('d', previewD);
+      preview.setAttribute('fill', 'none');
+      preview.setAttribute('stroke', COLOR_ACTIVE);
+      preview.setAttribute('stroke-width', '10');
+      preview.setAttribute('stroke-linecap', 'round');
+      preview.setAttribute('stroke-linejoin', 'round');
+      preview.setAttribute('stroke-opacity', '0.4');
+      tapGroup.appendChild(preview);
+    }
+
+    // 配置点（赤）
+    tapPoints.forEach((pt, i) => {
+      const beingDragged = isDragging && i === dragIdx;
+      const r = beingDragged ? 12 : 8;
+      const circle = document.createElementNS(SVG_NS, 'circle');
+      circle.setAttribute('cx', pt.x); circle.setAttribute('cy', pt.y);
+      circle.setAttribute('r', r); circle.setAttribute('fill', 'none');
+      circle.setAttribute('stroke', COLOR_ACTIVE);
+      circle.setAttribute('stroke-width', beingDragged ? '2.5' : '1.5');
+      tapGroup.appendChild(circle);
+
+      const dot = document.createElementNS(SVG_NS, 'circle');
+      dot.setAttribute('cx', pt.x); dot.setAttribute('cy', pt.y);
+      dot.setAttribute('r', '2'); dot.setAttribute('fill', COLOR_ACTIVE);
+      tapGroup.appendChild(dot);
+
+      // 直線セグメントの場合は四角マーク
+      if (!pt.curve) {
+        const mark = document.createElementNS(SVG_NS, 'rect');
+        mark.setAttribute('x', pt.x - 3); mark.setAttribute('y', pt.y - r - 8);
+        mark.setAttribute('width', '6'); mark.setAttribute('height', '3');
+        mark.setAttribute('fill', COLOR_ACTIVE); mark.setAttribute('fill-opacity', '0.6');
+        tapGroup.appendChild(mark);
+      }
+
+      const text = document.createElementNS(SVG_NS, 'text');
+      text.setAttribute('x', pt.x - r - 2); text.setAttribute('y', pt.y - r - 1);
+      text.setAttribute('text-anchor', 'end');
+      text.setAttribute('font-size', '9'); text.setAttribute('font-weight', '700');
+      text.setAttribute('fill', COLOR_ACTIVE); text.setAttribute('pointer-events', 'none');
+      text.textContent = i + 1;
+      tapGroup.appendChild(text);
+    });
+
+    // プレビュー点（半透明の緑）
+    if (previewPoint) {
+      const pc = document.createElementNS(SVG_NS, 'circle');
+      pc.setAttribute('cx', previewPoint.x); pc.setAttribute('cy', previewPoint.y);
+      pc.setAttribute('r', '8'); pc.setAttribute('fill', 'none');
+      pc.setAttribute('stroke', '#4CAF50'); pc.setAttribute('stroke-width', '2');
+      pc.setAttribute('stroke-opacity', '0.7');
+      tapGroup.appendChild(pc);
+      const pd = document.createElementNS(SVG_NS, 'circle');
+      pd.setAttribute('cx', previewPoint.x); pd.setAttribute('cy', previewPoint.y);
+      pd.setAttribute('r', '3'); pd.setAttribute('fill', '#4CAF50'); pd.setAttribute('fill-opacity', '0.7');
+      tapGroup.appendChild(pd);
+    }
   }
 
-  // 配置した点（中抜き円 + 中心ドット + 番号左上）
-  tapPoints.forEach((pt, i) => {
-    const beingDragged = isDragging && i === dragIdx;
-    const r = beingDragged ? 12 : 8;
-
-    // 中抜き円（透明）
-    const circle = document.createElementNS(SVG_NS, 'circle');
-    circle.setAttribute('cx', pt.x);
-    circle.setAttribute('cy', pt.y);
-    circle.setAttribute('r', r);
-    circle.setAttribute('fill', 'none');
-    circle.setAttribute('stroke', curColor);
-    circle.setAttribute('stroke-width', beingDragged ? '2.5' : '1.5');
-    tapGroup.appendChild(circle);
-
-    // 中心ドット
-    const dot = document.createElementNS(SVG_NS, 'circle');
-    dot.setAttribute('cx', pt.x);
-    dot.setAttribute('cy', pt.y);
-    dot.setAttribute('r', '2');
-    dot.setAttribute('fill', curColor);
-    tapGroup.appendChild(dot);
-
-    // 番号（左上に小さく）
-    const text = document.createElementNS(SVG_NS, 'text');
-    text.setAttribute('x', pt.x - r - 2);
-    text.setAttribute('y', pt.y - r - 1);
-    text.setAttribute('text-anchor', 'end');
-    text.setAttribute('font-size', '9');
-    text.setAttribute('font-weight', '700');
-    text.setAttribute('fill', curColor);
-    text.setAttribute('pointer-events', 'none');
-    text.textContent = i + 1;
-    tapGroup.appendChild(text);
-  });
+  // テーパーモード: 全ストロークの終点にタップ可能な丸を表示
+  if (taperMode) {
+    splineStrokes.forEach((stroke, i) => {
+      if (stroke.points.length < 2) return;
+      const ep = stroke.points[stroke.points.length - 1];
+      const ring = document.createElementNS(SVG_NS, 'circle');
+      ring.setAttribute('cx', ep.x); ring.setAttribute('cy', ep.y);
+      ring.setAttribute('r', '12');
+      ring.setAttribute('fill', stroke.taper ? '#ff9800' : 'transparent');
+      ring.setAttribute('fill-opacity', '0.3');
+      ring.setAttribute('stroke', '#ff9800');
+      ring.setAttribute('stroke-width', '2');
+      ring.setAttribute('stroke-dasharray', stroke.taper ? 'none' : '3,3');
+      tapGroup.appendChild(ring);
+    });
+  }
 }
 
-// ===========================
-// 画の確定・アンドゥ・全消し
-// ===========================
+// =========================================
+// ストローク検索（選択/消しゴム用）
+// =========================================
+function findNearestStroke(pt, threshold) {
+  threshold = threshold || 20;
+  let bestIdx = -1, bestDist = threshold;
+  for (let i = 0; i < splineStrokes.length; i++) {
+    // パス上の点をサンプリングして最短距離を求める
+    measurePath.setAttribute('d', splineStrokes[i].path);
+    const len = measurePath.getTotalLength();
+    const step = Math.max(2, len / 40);
+    for (let t = 0; t <= len; t += step) {
+      const p = measurePath.getPointAtLength(t);
+      const d = Math.hypot(p.x - pt.x, p.y - pt.y);
+      if (d < bestDist) { bestDist = d; bestIdx = i; }
+    }
+    // 制御点も検査
+    for (const sp of splineStrokes[i].points) {
+      const d = Math.hypot(sp.x - pt.x, sp.y - pt.y);
+      if (d < bestDist) { bestDist = d; bestIdx = i; }
+    }
+  }
+  return bestIdx;
+}
+
+function findNearestEndpoint(pt, threshold) {
+  threshold = threshold || 20;
+  let bestIdx = -1, bestDist = threshold;
+  for (let i = 0; i < splineStrokes.length; i++) {
+    if (splineStrokes[i].points.length < 2) continue;
+    const ep = splineStrokes[i].points[splineStrokes[i].points.length - 1];
+    const d = Math.hypot(ep.x - pt.x, ep.y - pt.y);
+    if (d < bestDist) { bestDist = d; bestIdx = i; }
+  }
+  return bestIdx;
+}
+
+// =========================================
+// 座標変換 + ポインター
+// =========================================
+function getSvgPoint(e) {
+  const rect = svg.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) * 300 / rect.width,
+    y: (e.clientY - rect.top) * 300 / rect.height
+  };
+}
+
+// タッチ本数を追跡（2本指はズーム用、描画しない）
+let activeTouches = 0;
+let drawCancelled = false;
+
+svg.addEventListener('touchstart', (e) => {
+  activeTouches = e.touches.length;
+  if (activeTouches === 1) {
+    e.preventDefault();
+  } else {
+    drawCancelled = true;
+    previewPoint = null;
+    tapStartPos = null;
+    redrawTapUI();
+  }
+}, {passive:false});
+
+svg.addEventListener('touchmove', (e) => {
+  activeTouches = e.touches.length;
+  if (activeTouches === 1 && !drawCancelled) {
+    e.preventDefault();
+  }
+}, {passive:false});
+
+svg.addEventListener('touchend', (e) => {
+  activeTouches = e.touches.length;
+  if (activeTouches === 0) {
+    drawCancelled = false;
+  }
+}, {passive:false});
+
+// --- ポインターイベント ---
+svg.addEventListener('pointerdown', (e) => {
+  if (drawCancelled) return;
+  if (e.pointerType === 'touch' && activeTouches > 1) return;
+  e.preventDefault();
+  svg.setPointerCapture(e.pointerId);
+  const pt = getSvgPoint(e);
+  tapStartPos = pt;
+  tapStartTime = Date.now();
+
+  // --- テーパーモード: 終点タップでテーパー切替 ---
+  if (taperMode) {
+    const epIdx = findNearestEndpoint(pt, 20);
+    if (epIdx >= 0) {
+      splineStrokes[epIdx].taper = !splineStrokes[epIdx].taper;
+      isDirty = true;
+      redrawAll();
+      autoSave();
+      tapStartPos = null;
+      return;
+    }
+  }
+
+  // --- 描画ツール ---
+  if (currentTool === 'draw') {
+    dragIdx = -1; isDragging = false;
+    for (let i = 0; i < tapPoints.length; i++) {
+      if (Math.hypot(tapPoints[i].x - pt.x, tapPoints[i].y - pt.y) < 20) {
+        dragIdx = i; break;
+      }
+    }
+    if (dragIdx < 0) {
+      const snapped = applySnap({x: Math.round(pt.x), y: Math.round(pt.y)});
+      lastSnappedPos = snapped;
+      previewPoint = snapped;
+      redrawTapUI();
+    }
+  }
+
+  // --- 選択ツール ---
+  if (currentTool === 'select') {
+    selectDragging = false;
+    if (selectedStrokeIdx >= 0) {
+      // ストローク選択済み → 制御点を探す
+      const stroke = splineStrokes[selectedStrokeIdx];
+      let foundPt = -1;
+      for (let i = 0; i < stroke.points.length; i++) {
+        if (Math.hypot(stroke.points[i].x - pt.x, stroke.points[i].y - pt.y) < 20) {
+          foundPt = i; break;
+        }
+      }
+      if (foundPt >= 0) {
+        selectedPointIdx = foundPt;
+        selectDragging = false; // ドラッグはmoveで検出
+        redrawAll();
+        return;
+      }
+    }
+    // ストロークを探す
+    const idx = findNearestStroke(pt, 20);
+    if (idx >= 0) {
+      selectedStrokeIdx = idx;
+      selectedPointIdx = -1;
+    } else {
+      selectedStrokeIdx = -1;
+      selectedPointIdx = -1;
+    }
+    redrawAll();
+  }
+
+  // --- 消しゴムツール ---
+  if (currentTool === 'erase') {
+    const idx = findNearestStroke(pt, 20);
+    if (idx >= 0) {
+      splineStrokes.splice(idx, 1);
+      isDirty = true;
+      if (selectedStrokeIdx >= splineStrokes.length) selectedStrokeIdx = -1;
+      redrawAll();
+      autoSave();
+    }
+    tapStartPos = null;
+  }
+});
+
+svg.addEventListener('pointermove', (e) => {
+  if (!tapStartPos || drawCancelled) return;
+  if (e.pointerType === 'touch' && activeTouches > 1) {
+    previewPoint = null;
+    tapStartPos = null;
+    redrawTapUI();
+    return;
+  }
+  const pt = getSvgPoint(e);
+
+  // --- 描画ツール ---
+  if (currentTool === 'draw') {
+    if (dragIdx >= 0) {
+      isDragging = true;
+      const dragPt = {x: Math.round(pt.x), y: Math.round(pt.y - 40)};
+      const snapped = applySnap(dragPt);
+      lastSnappedPos = snapped;
+      tapPoints[dragIdx] = {x: snapped.x, y: snapped.y, curve: tapPoints[dragIdx].curve};
+      previewPoint = null;
+      redrawTapUI();
+    } else {
+      const snapped = applySnap({x: Math.round(pt.x), y: Math.round(pt.y)});
+      lastSnappedPos = snapped;
+      previewPoint = snapped;
+      redrawTapUI();
+    }
+  }
+
+  // --- 選択ツール: 点ドラッグ ---
+  if (currentTool === 'select' && selectedStrokeIdx >= 0 && selectedPointIdx >= 0) {
+    selectDragging = true;
+    const dragPt = {x: Math.round(pt.x), y: Math.round(pt.y - 40)};
+    const snapped = applySnap(dragPt);
+    const stroke = splineStrokes[selectedStrokeIdx];
+    stroke.points[selectedPointIdx] = {
+      x: snapped.x, y: snapped.y,
+      curve: stroke.points[selectedPointIdx].curve
+    };
+    stroke.path = buildStrokePath(stroke.points);
+    isDirty = true;
+    redrawTapUI();
+  }
+});
+
+svg.addEventListener('pointerup', (e) => {
+  previewPoint = null;
+
+  if (currentTool === 'draw') {
+    if (!tapStartPos || drawCancelled) return;
+    const pt = getSvgPoint(e);
+    if (isDragging && dragIdx >= 0) {
+      redrawTapUI();
+    } else {
+      const dist = Math.hypot(pt.x - tapStartPos.x, pt.y - tapStartPos.y);
+      const elapsed = Date.now() - tapStartTime;
+      if (dist < 15 && elapsed < 500) {
+        const newPt = lastSnappedPos || {x: Math.round(pt.x), y: Math.round(pt.y)};
+        tapPoints.push({x: newPt.x, y: newPt.y, curve: curveMode});
+      }
+      redrawTapUI();
+    }
+  }
+
+  if (currentTool === 'select' && selectDragging) {
+    selectDragging = false;
+    autoSave();
+    redrawAll();
+  }
+
+  tapStartPos = null; dragIdx = -1; isDragging = false; lastSnappedPos = null;
+});
+
+// =========================================
+// 画操作
+// =========================================
 function confirmStroke() {
-  if (tapPoints.length < 2) { alert('2点以上配置してください'); return; }
-  const path = catmullRomToPath(tapPoints);
-  splineStrokes.push({ points: [...tapPoints], path, taper: false });
+  if (tapPoints.length < 2) return;
+  const path = buildStrokePath(tapPoints);
+  splineStrokes.push({points: [...tapPoints], path, taper: false});
   tapPoints = [];
-  redrawTapUI();
-  updateStrokeCount();
+  isDirty = true;
+  redrawAll();
+  autoSave();
 }
 
-function undoPoint() {
-  if (tapPoints.length === 0) return;
-  tapPoints.pop();
-  redrawTapUI();
-  updateStrokeCount();
-}
-
-function undoStroke() {
+function prevStroke() {
   if (tapPoints.length > 0) {
     tapPoints = [];
   } else if (splineStrokes.length > 0) {
-    // 最後の画を点に戻す（再編集可能）
     const last = splineStrokes.pop();
     tapPoints = last.points;
+    isDirty = true;
   }
-  redrawTapUI();
-  updateStrokeCount();
+  selectedStrokeIdx = -1;
+  selectedPointIdx = -1;
+  setTool('draw');
 }
 
-function clearAll() {
-  tapPoints = [];
-  splineStrokes = [];
-  redrawTapUI();
-  updateStrokeCount();
-  document.getElementById('outputArea').style.display = 'none';
+function nextStroke() {
+  confirmStroke();
 }
 
-function updateStrokeCount() {
-  const n = splineStrokes.length;
-  const pts = tapPoints.length;
-  if (n === 0 && pts === 0) {
-    strokeCountEl.textContent = 'タップして点を配置';
-  } else if (pts > 0) {
-    strokeCountEl.textContent = `${n}画確定 / ${pts}点 配置中`;
-  } else {
-    strokeCountEl.textContent = `${n}画 入力済み`;
+function deleteStroke() {
+  if (currentTool === 'select' && selectedStrokeIdx >= 0) {
+    splineStrokes.splice(selectedStrokeIdx, 1);
+    selectedStrokeIdx = -1;
+    selectedPointIdx = -1;
+    isDirty = true;
+    setTool('draw');
+    return;
   }
+  if (tapPoints.length > 0) {
+    tapPoints = [];
+  } else if (splineStrokes.length > 0) {
+    splineStrokes.pop();
+    isDirty = true;
+  }
+  redrawAll();
 }
 
-// ===========================
-// 中心線: Zhang-Suen 細線化で骨格抽出
-// ===========================
-
-// フォントをCanvasに直接描画してビットマップを取得（ポリゴン近似より正確）
+// =========================================
+// 中心線（Zhang-Suen細線化）
+// =========================================
 function rasterizeFromFont(kanji, w, h) {
   const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
+  canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext('2d');
   ctx.font = '600 250px "Klee One"';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
   ctx.fillStyle = '#000';
-  // Klee One メトリクス: ascent=1160, descent=288, unitsPerEm=1000
-  // CSS座標系に合わせたベースライン: 25 + (-56) + 290 = 259
   ctx.fillText(kanji, w / 2, 259);
   const img = ctx.getImageData(0, 0, w, h);
   const bmp = new Uint8Array(w * h);
-  for (let i = 0; i < w * h; i++) {
-    bmp[i] = img.data[i * 4 + 3] > 128 ? 1 : 0;
-  }
+  for (let i = 0; i < w * h; i++) bmp[i] = img.data[i * 4 + 3] > 128 ? 1 : 0;
   return bmp;
 }
 
-// Zhang-Suen 細線化（ビットマップを1ピクセル幅の骨格にする）
 function zhangSuenThin(bmp, w, h) {
   const g = (x, y) => (x >= 0 && x < w && y >= 0 && y < h) ? bmp[y * w + x] : 0;
   let changed = true;
@@ -504,17 +1081,17 @@ function zhangSuenThin(bmp, w, h) {
       for (let y = 1; y < h - 1; y++) {
         for (let x = 1; x < w - 1; x++) {
           if (!g(x, y)) continue;
-          const n = [g(x,y-1), g(x+1,y-1), g(x+1,y), g(x+1,y+1),
-                     g(x,y+1), g(x-1,y+1), g(x-1,y), g(x-1,y-1)];
-          const B = n.reduce((s, v) => s + v, 0);
+          const n = [g(x,y-1),g(x+1,y-1),g(x+1,y),g(x+1,y+1),
+                     g(x,y+1),g(x-1,y+1),g(x-1,y),g(x-1,y-1)];
+          const B = n.reduce((s,v) => s+v, 0);
           if (B < 2 || B > 6) continue;
           let A = 0;
-          for (let i = 0; i < 8; i++) if (n[i] === 0 && n[(i+1)%8] === 1) A++;
+          for (let i = 0; i < 8; i++) if (n[i]===0 && n[(i+1)%8]===1) A++;
           if (A !== 1) continue;
           if (step === 0) {
-            if (n[0]*n[2]*n[4] !== 0 || n[2]*n[4]*n[6] !== 0) continue;
+            if (n[0]*n[2]*n[4]!==0 || n[2]*n[4]*n[6]!==0) continue;
           } else {
-            if (n[0]*n[2]*n[6] !== 0 || n[0]*n[4]*n[6] !== 0) continue;
+            if (n[0]*n[2]*n[6]!==0 || n[0]*n[4]*n[6]!==0) continue;
           }
           rem.push(y * w + x);
         }
@@ -524,73 +1101,58 @@ function zhangSuenThin(bmp, w, h) {
   }
 }
 
-// 骨格ピクセルを順序付きポリラインに変換
 function traceSkeleton(bmp, w, h) {
   const vis = new Uint8Array(w * h);
   const g = (x, y) => (x >= 0 && x < w && y >= 0 && y < h) ? bmp[y * w + x] : 0;
   const dirs = [[-1,-1],[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0]];
   const nCount = (x, y) => { let c=0; for (const [dx,dy] of dirs) c += g(x+dx,y+dy); return c; };
-
   function trace(sx, sy) {
-    const chain = [{x:sx, y:sy}];
-    vis[sy * w + sx] = 1;
+    const chain = [{x:sx, y:sy}]; vis[sy * w + sx] = 1;
     let cx = sx, cy = sy;
     while (true) {
       let found = false;
       for (const [dx,dy] of dirs) {
         const nx = cx+dx, ny = cy+dy;
         if (g(nx,ny) && !vis[ny*w+nx]) {
-          vis[ny*w+nx] = 1;
-          chain.push({x:nx, y:ny});
-          cx = nx; cy = ny;
-          found = true;
-          break;
+          vis[ny*w+nx] = 1; chain.push({x:nx, y:ny});
+          cx = nx; cy = ny; found = true; break;
         }
       }
       if (!found) break;
     }
     return chain;
   }
-
   const polylines = [];
-  // 端点（近傍1つ）から優先的にたどる
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++)
       if (g(x,y) && !vis[y*w+x] && nCount(x,y) === 1) {
-        const c = trace(x, y);
-        if (c.length >= 6) polylines.push(c);
+        const c = trace(x, y); if (c.length >= 6) polylines.push(c);
       }
-  // 残りの未訪問ピクセル（ループ等）
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++)
       if (g(x,y) && !vis[y*w+x]) {
-        const c = trace(x, y);
-        if (c.length >= 6) polylines.push(c);
+        const c = trace(x, y); if (c.length >= 6) polylines.push(c);
       }
   return polylines;
 }
 
-// 中心線キャッシュを更新（Canvas描画 → 細線化、GLYPH_DATA不要で全漢字対応）
 function ensureCenterCache() {
-  const kanji = kanjiInput.value.trim();
-  if (!kanji || kanji === cachedCenterKanji) return;
+  const k = gradeKanji[currentIndex];
+  if (!k) return;
+  const kanji = k.kanji;
+  if (kanji === cachedCenterKanji) return;
   cachedCenterKanji = kanji;
   cachedCenterPoints = [];
   cachedCenterLines = [];
-
   const W = 300, H = 300;
   const bmp = rasterizeFromFont(kanji, W, H);
   zhangSuenThin(bmp, W, H);
-  // 骨格ビットマップを保存（自動登録のコリドーマスク用）
-  cachedSkeletonBmp = new Uint8Array(bmp);
   const polylines = traceSkeleton(bmp, W, H);
-
-  // ポリラインを間引き（3px間隔に簡略化）
   cachedCenterLines = polylines.map(chain => {
     const s = [chain[0]];
     for (let i = 1; i < chain.length - 1; i++) {
       const last = s[s.length - 1];
-      if (Math.hypot(chain[i].x - last.x, chain[i].y - last.y) >= 3) s.push(chain[i]);
+      if (Math.hypot(chain[i].x - last.x, chain[i].y - last.y) >= 2.2) s.push(chain[i]);
     }
     s.push(chain[chain.length - 1]);
     return s;
@@ -598,484 +1160,123 @@ function ensureCenterCache() {
   for (const line of cachedCenterLines) cachedCenterPoints.push(...line);
 }
 
-// 中心線を点線で描画
 function drawCenterLines() {
   centerLineGroup.innerHTML = '';
-  const snap = document.getElementById('centerSnap');
-  if (!snap || !snap.checked) return;
-
   ensureCenterCache();
-
   for (const line of cachedCenterLines) {
-    const pts = line.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-    const polyline = document.createElementNS(SVG_NS, 'polyline');
-    polyline.setAttribute('points', pts);
-    polyline.setAttribute('fill', 'none');
-    polyline.setAttribute('stroke', '#FF8E53');
-    polyline.setAttribute('stroke-width', '1.5');
-    polyline.setAttribute('stroke-dasharray', '4,4');
-    polyline.setAttribute('stroke-opacity', '0.6');
-    centerLineGroup.appendChild(polyline);
+    for (const p of line) {
+      const c = document.createElementNS(SVG_NS, 'circle');
+      c.setAttribute('cx', p.x); c.setAttribute('cy', p.y);
+      c.setAttribute('r', '0.8');
+      c.setAttribute('fill', '#E05030');
+      c.setAttribute('fill-opacity', '0.55');
+      centerLineGroup.appendChild(c);
+    }
   }
 }
 
-// 最近傍の中心点にスナップ
 function applySnap(pt) {
-  const snap = document.getElementById('centerSnap');
-  if (!snap || !snap.checked) return pt;
+  if (!centerSnapOn) return pt;
   ensureCenterCache();
   if (cachedCenterPoints.length === 0) return pt;
-
-  let best = null, bestDist = 25;
+  let best = null, bestDist = 5;
   for (const cp of cachedCenterPoints) {
     const d = Math.hypot(cp.x - pt.x, cp.y - pt.y);
-    if (d < bestDist) {
-      bestDist = d;
-      best = cp;
-    }
+    if (d < bestDist) { bestDist = d; best = cp; }
   }
-  return best ? { x: Math.round(best.x), y: Math.round(best.y) } : pt;
+  return best ? {x: Math.round(best.x), y: Math.round(best.y)} : pt;
 }
 
-// ===========================
-// テーパーモード（はね/はらい登録）
-// ===========================
-function toggleTaperMode() {
-  taperMode = !taperMode;
-  const btn = document.getElementById('taperBtn');
-  if (taperMode) {
-    btn.classList.remove('secondary');
-    btn.classList.add('taper-on');
-    btn.textContent = 'テーパー ON';
-    strokeCountEl.textContent = '画をタップではね/はらい切替';
-  } else {
-    btn.classList.remove('taper-on');
-    btn.classList.add('secondary');
-    btn.textContent = 'テーパー';
-    updateStrokeCount();
-  }
-  redrawTapUI();
+// =========================================
+// ナビゲーション
+// =========================================
+function prevKanji() {
+  if (currentIndex <= 0) return;
+  autoSave(); currentIndex--; loadCurrentKanji();
+}
+function nextKanji() {
+  if (currentIndex >= gradeKanji.length - 1) return;
+  autoSave(); currentIndex++; loadCurrentKanji();
 }
 
-// ストロークのヒットテスト（タップ位置に最も近いストロークのインデックスを返す）
-function hitTestStroke(svgPt) {
-  for (let i = splineStrokes.length - 1; i >= 0; i--) {
-    measurePath.setAttribute('d', splineStrokes[i].path);
-    const totalLen = measurePath.getTotalLength();
-    const numSamples = Math.ceil(totalLen / 5);
-    let minDist = Infinity;
-    for (let j = 0; j <= numSamples; j++) {
-      const t = (j / numSamples) * totalLen;
-      const p = measurePath.getPointAtLength(t);
-      const d = Math.hypot(p.x - svgPt.x, p.y - svgPt.y);
-      if (d < minDist) minDist = d;
-    }
-    if (minDist < 15) return i;
-  }
-  return -1;
+// =========================================
+// 保存
+// =========================================
+async function autoSave() {
+  if (!isDirty || splineStrokes.length === 0) return;
+  await saveData();
 }
 
-// テーパー付きポリゴンパスを生成（終端を細くする）
-function createTaperedPolygon(pathD, strokeWidth, taperLen) {
-  measurePath.setAttribute('d', pathD);
-  const totalLen = measurePath.getTotalLength();
-  const step = 2;
-  const numSamples = Math.max(10, Math.ceil(totalLen / step));
-
-  const leftPts = [];
-  const rightPts = [];
-
-  // テーパー区間がパス全長より長い場合は80%に制限
-  const effectiveTaper = Math.min(taperLen, totalLen * 0.8);
-
-  for (let i = 0; i <= numSamples; i++) {
-    const t = (i / numSamples) * totalLen;
-    const pt = measurePath.getPointAtLength(t);
-
-    // 接線ベクトル（前後の微小差分で近似）
-    const dt = 0.5;
-    const ptA = measurePath.getPointAtLength(Math.max(0, t - dt));
-    const ptB = measurePath.getPointAtLength(Math.min(totalLen, t + dt));
-    const tx = ptB.x - ptA.x;
-    const ty = ptB.y - ptA.y;
-    const tLen = Math.hypot(tx, ty) || 1;
-
-    // 法線（接線に直交）
-    const nx = -ty / tLen;
-    const ny = tx / tLen;
-
-    // 幅: 終端からeffectiveTaper以内は線形にテーパー
-    const distFromEnd = totalLen - t;
-    let halfW = strokeWidth / 2;
-    if (distFromEnd < effectiveTaper) {
-      halfW *= distFromEnd / effectiveTaper;
-    }
-
-    leftPts.push({ x: pt.x + nx * halfW, y: pt.y + ny * halfW });
-    rightPts.push({ x: pt.x - nx * halfW, y: pt.y - ny * halfW });
-  }
-
-  // ポリゴンパス: 左辺→先端→右辺（逆順）→閉じる
-  let d = `M ${leftPts[0].x.toFixed(1)},${leftPts[0].y.toFixed(1)}`;
-  for (let i = 1; i < leftPts.length; i++) {
-    d += ` L ${leftPts[i].x.toFixed(1)},${leftPts[i].y.toFixed(1)}`;
-  }
-  for (let i = rightPts.length - 1; i >= 0; i--) {
-    d += ` L ${rightPts[i].x.toFixed(1)},${rightPts[i].y.toFixed(1)}`;
-  }
-  d += ' Z';
-  return d;
-}
-
-// ===========================
-// KanjiVG 自動ストローク登録（コリドーマスク方式）
-// ===========================
-
-// KanjiVGのSVGデータをGitHubから取得
-async function fetchKanjiVG(kanji) {
-  const code = kanji.codePointAt(0).toString(16).padStart(5, '0');
-  const url = `https://raw.githubusercontent.com/KanjiVG/kanjivg/master/kanji/${code}.svg`;
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`KanjiVGにデータなし: ${kanji}`);
-  return resp.text();
-}
-
-// SVGテキストを解析して各画のpath情報を書き順で返す
-function parseKVG(svgText) {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(svgText, 'image/svg+xml');
-  const paths = [...doc.querySelectorAll('path[id]')];
-  paths.sort((a, b) => {
-    const numA = parseInt(a.id.match(/s(\d+)$/)?.[1] || '0');
-    const numB = parseInt(b.id.match(/s(\d+)$/)?.[1] || '0');
-    return numA - numB;
-  });
-  return paths.map(p => ({
-    d: p.getAttribute('d'),
-    type: p.getAttributeNS('http://kanjivg.tagaini.net', 'type')
-       || p.getAttribute('kvg:type') || '',
-    id: p.id
-  }));
-}
-
-// KanjiVGのパスを等間隔サンプリング（109座標系のまま）
-function sampleKVGPath(pathD) {
-  measurePath.setAttribute('d', pathD);
-  const totalLen = measurePath.getTotalLength();
-  const numPoints = Math.max(10, Math.ceil(totalLen / 2));
-  const points = [];
-  for (let i = 0; i <= numPoints; i++) {
-    const t = (i / numPoints) * totalLen;
-    const pt = measurePath.getPointAtLength(t);
-    points.push({ x: pt.x, y: pt.y });
-  }
-  return points;
-}
-
-// 109×109 → 300×300 座標変換
-const KVG_SCALE = 300 / 109;
-function scaleKVGPoints(points) {
-  return points.map(p => ({ x: p.x * KVG_SCALE, y: p.y * KVG_SCALE }));
-}
-
-// KanjiVGパスの周囲にコリドー（回廊）マスクを作り、その中の骨格だけを抽出
-function extractStrokeSkeleton(kvgPathPts, corridorRadius) {
-  if (!cachedSkeletonBmp) return [];
-  const W = 300, H = 300;
-  const masked = new Uint8Array(W * H);
-
-  // KVGパスの各点を中心に円形領域を設定し、骨格ピクセルを収集
-  for (const pt of kvgPathPts) {
-    const cx = Math.round(pt.x), cy = Math.round(pt.y);
-    const r = corridorRadius;
-    const r2 = r * r;
-    for (let dy = -r; dy <= r; dy++) {
-      for (let dx = -r; dx <= r; dx++) {
-        if (dx * dx + dy * dy > r2) continue;
-        const mx = cx + dx, my = cy + dy;
-        if (mx >= 0 && mx < W && my >= 0 && my < H) {
-          if (cachedSkeletonBmp[my * W + mx]) {
-            masked[my * W + mx] = 1;
-          }
-        }
-      }
-    }
-  }
-
-  // マスク済み骨格をトレース（traceSkeletonと同じアルゴリズムを使用）
-  const polylines = traceSkeleton(masked, W, H);
-  if (polylines.length === 0) return [];
-
-  // 最長ポリラインを返す（目的の画のメインパス）
-  polylines.sort((a, b) => b.length - a.length);
-  return polylines[0];
-}
-
-// ポリラインの向きをKVGの始点→終点に合わせる
-function orientPolyline(poly, kvgStart, kvgEnd) {
-  if (poly.length < 2) return poly;
-  const startToKvgStart = Math.hypot(poly[0].x - kvgStart.x, poly[0].y - kvgStart.y);
-  const endToKvgStart = Math.hypot(poly[poly.length-1].x - kvgStart.x, poly[poly.length-1].y - kvgStart.y);
-  if (endToKvgStart < startToKvgStart) {
-    return poly.slice().reverse();
-  }
-  return poly;
-}
-
-// 点-線分距離（RDP用）
-function ptToLineDist(p, a, b) {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
-  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq));
-  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
-}
-
-// Ramer-Douglas-Peucker 間引き
-function rdpSimplify(points, epsilon) {
-  if (points.length <= 2) return [...points];
-  const start = points[0], end = points[points.length - 1];
-  let maxDist = 0, maxIdx = 0;
-  for (let i = 1; i < points.length - 1; i++) {
-    const d = ptToLineDist(points[i], start, end);
-    if (d > maxDist) { maxDist = d; maxIdx = i; }
-  }
-  if (maxDist > epsilon) {
-    const left = rdpSimplify(points.slice(0, maxIdx + 1), epsilon);
-    const right = rdpSimplify(points.slice(maxIdx), epsilon);
-    return [...left.slice(0, -1), ...right];
-  }
-  return [start, end];
-}
-
-// kvg:type からテーパー（はね/はらい）を判定
-const TAPER_TYPES = new Set(['㇒','㇏','㇀','㇂','㇃','㇚','㇇']);
-function shouldTaper(kvgType) {
-  const base = kvgType.replace(/[a-z]+$/, '');
-  return TAPER_TYPES.has(base);
-}
-
-// ポリラインからSVGパス文字列を生成（直線連結、アウトラインの外に出ない）
-function polylineToPath(points) {
-  if (points.length < 2) return '';
-  let d = `M ${points[0].x},${points[0].y}`;
-  for (let i = 1; i < points.length; i++) {
-    d += ` L ${points[i].x},${points[i].y}`;
-  }
-  return d;
-}
-
-// JSONからストロークデータを読み込む
-function loadStrokeData(data) {
-  const newStrokes = [];
-  for (const s of data.strokes) {
-    newStrokes.push({
-      points: s.points,
-      path: s.path,
-      taper: s.taper || false
-    });
-  }
-  splineStrokes = newStrokes;
-  tapPoints = [];
-  redrawTapUI();
-  updateStrokeCount();
-  strokeCountEl.textContent = `${newStrokes.length}画 自動登録完了（JSON）`;
-}
-
-// メイン: まずローカルJSON → なければコリドーマスク方式にフォールバック
-async function autoRegisterStrokes() {
-  const kanji = kanjiInput.value.trim();
-  if (!kanji) { alert('漢字を入力してください'); return; }
-
-  if (splineStrokes.length > 0 || tapPoints.length > 0) {
-    if (!confirm('現在のストロークを上書きしますか？')) return;
-  }
-
-  strokeCountEl.textContent = 'ストロークデータ読み込み中...';
-
-  try {
-    // まずローカルJSONを試す（auto_strokes.py の生成物）
-    const code = kanji.codePointAt(0).toString(16).padStart(5, '0');
-    try {
-      const resp = await fetch(`stroke_data/${code}.json`);
-      if (resp.ok) {
-        const data = await resp.json();
-        console.log(`=== ${kanji} JSON読み込み (${data.stroke_count}画) ===`);
-        loadStrokeData(data);
-        return;
-      }
-    } catch (e) {
-      console.log(`JSON読み込み失敗、コリドーマスク方式にフォールバック: ${e}`);
-    }
-
-    // JSONなし → 従来のコリドーマスク方式
-    strokeCountEl.textContent = 'KanjiVGデータ取得中...';
-    await document.fonts.ready;
-
-    const svgText = await fetchKanjiVG(kanji);
-    const kvgStrokes = parseKVG(svgText);
-    if (kvgStrokes.length === 0) {
-      alert('KanjiVGにストロークデータがありません');
-      strokeCountEl.textContent = 'タップして点を配置';
-      return;
-    }
-
-    // 骨格キャッシュ準備
-    ensureCenterCache();
-
-    const newStrokes = [];
-    const CORRIDOR = 25;
-    console.log(`=== ${kanji} (${kvgStrokes.length}画) コリドーマスク方式 ===`);
-
-    for (const kvg of kvgStrokes) {
-      // KVGパスをサンプリング・スケーリング
-      const rawPts = sampleKVGPath(kvg.d);
-      const scaledPts = scaleKVGPoints(rawPts);
-
-      // コリドー内の骨格を抽出（この画の周辺だけ）
-      let skelPts = extractStrokeSkeleton(scaledPts, CORRIDOR);
-
-      if (skelPts.length < 2) {
-        // フォールバック: 骨格なし → KVG座標をそのまま使う
-        console.log(`${kvg.id}: 骨格なし、KVG座標をフォールバック`);
-        skelPts = scaledPts.map(p => ({x: Math.round(p.x), y: Math.round(p.y)}));
-      } else {
-        console.log(`${kvg.id}: 骨格${skelPts.length}点抽出`);
-      }
-
-      // KVGの始点→終点に向きを合わせる
-      skelPts = orientPolyline(skelPts, scaledPts[0], scaledPts[scaledPts.length - 1]);
-
-      // 間引き（骨格点は密なので適度に減らす）
-      let controlPts = rdpSimplify(skelPts, 3);
-      if (controlPts.length < 2) controlPts = [skelPts[0], skelPts[skelPts.length - 1]];
-
-      // ポリラインパス生成（直線連結で確実にアウトライン内に留まる）
-      const path = polylineToPath(controlPts);
-      const taper = shouldTaper(kvg.type);
-
-      console.log(`  → ${controlPts.length}点, taper=${taper}`);
-      newStrokes.push({ points: controlPts, path, taper });
-    }
-
-    // 登録
-    splineStrokes = newStrokes;
-    tapPoints = [];
-    redrawTapUI();
-    updateStrokeCount();
-    strokeCountEl.textContent = `${newStrokes.length}画 自動登録完了`;
-
-  } catch (err) {
-    strokeCountEl.textContent = 'タップして点を配置';
-    alert(`自動登録エラー: ${err.message}`);
-    console.error(err);
-  }
-}
-
-// ===========================
-// JSON出力
-// ===========================
-function exportJSON() {
-  const kanji = kanjiInput.value.trim();
-  if (!kanji) { alert('漢字を入力してください'); return; }
-  if (splineStrokes.length === 0) { alert('画を確定してください'); return; }
-
+async function saveData() {
+  const k = gradeKanji[currentIndex];
+  if (!k || splineStrokes.length === 0) return;
   const data = {
-    kanji,
+    kanji: k.kanji, unicode: k.unicode,
+    source: 'editor',
+    stroke_count: splineStrokes.length,
     strokes: splineStrokes.map(s => ({
-      points: s.points,
+      points: s.points.map(p => ({x: p.x, y: p.y, curve: p.curve})),
       path: s.path,
-      taper: s.taper || false
-    }))
+      taper: s.taper || false,
+    })),
   };
-  const jsonStr = JSON.stringify(data, null, 2);
-  const outputArea = document.getElementById('outputArea');
-  const jsonOutput = document.getElementById('jsonOutput');
-  jsonOutput.value = jsonStr;
-  outputArea.style.display = 'block';
-}
-
-async function copyToClipboard() {
-  const text = document.getElementById('jsonOutput').value;
   try {
-    await navigator.clipboard.writeText(text);
-    const btn = event.target;
-    const orig = btn.textContent;
-    btn.textContent = 'コピーしました！';
-    setTimeout(() => btn.textContent = orig, 1500);
-  } catch {
-    document.getElementById('jsonOutput').select();
-  }
+    const resp = await fetch(`${API_BASE}/api/save/${k.unicode}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data),
+    });
+    if (resp.ok) {
+      isDirty = false;
+      saveBtn.textContent = 'SAVED';
+      saveBtn.classList.add('saved');
+      setTimeout(() => { saveBtn.textContent = 'SAVE'; saveBtn.classList.remove('saved'); }, 1500);
+      k.has_data = true; k.stroke_count = splineStrokes.length;
+      updateProgress();
+    }
+  } catch (e) { console.error('Save failed:', e); }
 }
 
-// ===========================
-// フォントから抽出した頂点データ（参照用）
-// ===========================
-const GLYPH_DATA = {
-  '山': {
-    outline: [
-      [85.5,263.0],[219.8,251.5],[218.2,264.2],[218.0,266.5],
-      [232.2,277.5],[236.2,271.2],[237.8,138.8],[226.8,129.5],
-      [219.5,128.0],[216.8,129.8],[217.8,132.2],[220.5,146.8],
-      [219.8,236.2],[157.0,241.2],[157.0,76.2],[138.2,67.2],
-      [135.0,69.0],[136.2,71.8],[139.8,84.2],[140.8,242.8],
-      [80.5,247.8],[80.0,145.0],[70.8,135.8],[61.8,133.8],
-      [58.8,135.5],[59.8,138.0],[62.8,152.5],[64.5,237.8],
-      [62.2,251.8],[61.5,255.0],[73.0,265.0]
-    ]
-  },
-  '九': {
-    outline: [
-      [265.8,217.2],[265.8,212.2],[262.0,199.5],[256.8,211.5],
-      [249.5,240.5],[219.5,255.2],[196.5,243.2],[197.0,235.5],
-      [207.2,138.2],[208.8,130.5],[197.0,121.2],[193.2,121.5],
-      [145.8,126.0],[150.8,71.2],[150.8,70.8],[131.8,59.2],
-      [128.2,61.5],[128.5,62.8],[131.8,79.0],[131.8,80.5],
-      [127.8,127.8],[78.8,132.2],[72.2,132.5],[59.5,131.2],
-      [58.5,131.0],[57.0,132.5],[57.2,134.0],[71.2,147.5],
-      [79.8,146.8],[125.0,142.8],[41.8,269.0],[36.2,275.0],
-      [39.0,276.8],[129.2,190.2],[143.2,141.0],[190.2,136.8],
-      [180.0,239.5],[179.8,246.0],[218.2,271.8]
-    ]
+// =========================================
+// キーボードショートカット
+// =========================================
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'Enter') { e.preventDefault(); confirmStroke(); }
+  else if (e.key === 'z' && !e.ctrlKey) { e.preventDefault(); undoAction(); }
+  else if (e.key === 'z' && e.ctrlKey) { e.preventDefault(); undoAction(); }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); prevKanji(); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); nextKanji(); }
+  else if (e.key === 's' && !e.ctrlKey) { e.preventDefault(); toggleSnap(); }
+  else if (e.key === 'Escape') {
+    e.preventDefault();
+    if (selectedStrokeIdx >= 0) {
+      selectedStrokeIdx = -1; selectedPointIdx = -1;
+      setTool('draw');
+    } else {
+      tapPoints = []; redrawAll();
+    }
   }
-};
-
-// ===========================
-// フォントアウトライン表示（参照用）
-// ===========================
-let pointsVisible = false;
-const pointsGroup = document.createElementNS(SVG_NS, 'g');
-pointsGroup.id = 'glyphPoints';
-pointsGroup.style.display = 'none';
-pointsGroup.setAttribute('pointer-events', 'none');
-svg.appendChild(pointsGroup);
-
-function togglePoints() {
-  pointsVisible = !pointsVisible;
-  if (pointsVisible) {
-    showGlyphOutline();
-    pointsGroup.style.display = '';
-  } else {
-    pointsGroup.style.display = 'none';
+  else if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (currentTool === 'select' && selectedStrokeIdx >= 0) {
+      e.preventDefault(); deleteStroke();
+    }
   }
-}
+});
 
-function showGlyphOutline() {
-  pointsGroup.innerHTML = '';
-  const kanji = kanjiInput.value.trim();
-  const data = GLYPH_DATA[kanji];
-  if (!data || !data.outline) return;
-
-  const pts = data.outline.map(p => p.join(',')).join(' ');
-  const poly = document.createElementNS(SVG_NS, 'polygon');
-  poly.setAttribute('points', pts);
-  poly.setAttribute('fill', '#888');
-  poly.setAttribute('fill-opacity', '0.1');
-  poly.setAttribute('stroke', '#aaa');
-  poly.setAttribute('stroke-width', '0.5');
-  pointsGroup.appendChild(poly);
+// =========================================
+// 起動（フォント読み込み完了を待つ）
+// =========================================
+async function startApp() {
+  try {
+    await document.fonts.load('600 250px "Klee One"');
+  } catch (e) {
+    console.warn('Font load warning:', e);
+  }
+  await document.fonts.ready;
+  init();
 }
+startApp();
 </script>
-
 </body>
 </html>

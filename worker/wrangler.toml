@@ -1,0 +1,7 @@
+name = "kanji-stroke-api"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "eb74b298326846c79ad4e05a5c2fb21e"
